@@ -1,0 +1,49 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+      - run: bun run check
+      # The tests built dist/land and ran it, so the release ships the binary they tested.
+      - run: mv dist/land "dist/land-$(uname -s)-$(uname -m)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: land-${{ matrix.os }}
+          path: dist/land-*
+
+  release:
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      # A landing that changes the version in package.json publishes it.
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v$(jq -r .version package.json)"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "$tag is already released"
+          else
+            chmod +x dist/land-*
+            gh release create "$tag" dist/land-* --target "$GITHUB_SHA" --title "$tag" --notes "land $tag"
+          fi

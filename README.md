@@ -1,0 +1,69 @@
+# land
+
+`land` lands finished commits on a repository's `main`, with no pull request.
+It rebases your branch onto `origin/main`, runs the repository's gate, and
+pushes:
+
+```text
+$ land
+land: gate   bun run check   ok in 1m 49s
+land: push   main is at 41d07be
+```
+
+When the rebase conflicts, `land` aborts it, names the files, and leaves your
+branch as it was. When the gate fails, `land` pushes nothing and exits with the
+gate's status. When `main` moves while the gate runs, `land` rebases and pushes
+without running the gate again, and names the commit the gate ran on. Lands
+from several worktrees of one clone can run at once.
+
+`land guide` prints the procedure around a landing: branch, commit, check,
+review, land and report.
+
+## Install
+
+Run this on macOS arm64 or Linux x64. The binary needs no Bun.
+
+```bash
+mkdir -p ~/.local/bin && curl -fsSL "https://github.com/SolenesInc/land/releases/latest/download/land-$(uname -s)-$(uname -m)" -o ~/.local/bin/land && chmod +x ~/.local/bin/land
+```
+
+Put `~/.local/bin` on your `PATH`, then check the install with `land --version`.
+
+## Adopt land in a repository
+
+1. Add `land.toml` at the repository root. It names the gate: the fast checks
+   that must pass before a push.
+
+   ```toml
+   gate = "bun run check"
+   ```
+
+   `land` runs the gate with `sh -c` at the repository root, and sets
+   `LAND_BASE` to the `origin/main` commit the landing sits on and `LAND_HEAD`
+   to the commit it pushes. To land on a branch other than `main`, add
+   `main = "<branch>"`. Leave `gate` out only if the repository has no checks.
+
+2. Add these two lines to the repository's agent guidance, such as `AGENTS.md`:
+
+   ```markdown
+   This repository lands on `main` with `land`, with no pull request.
+   Before you land a change, run `land guide` and follow it.
+   ```
+
+The first `land` in a clone installs a pre-push hook that refuses a plain
+`git push` to `main`. `land` installs no hook when the clone sets
+`core.hooksPath` or already has a pre-push hook, and says so.
+
+## Develop
+
+```bash
+bun install
+bun run check
+```
+
+`bun run check` typechecks, checks formatting, and runs the tests, which build
+the binary and drive it against real git repositories. This repository lands
+with its own `land`. CI runs the same check on `main` on Ubuntu and macOS.
+
+To release, change `version` in `package.json` and land the change. CI then
+publishes the binaries as the GitHub release `v<version>`.
