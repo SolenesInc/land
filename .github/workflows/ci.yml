@@ -12,7 +12,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -20,7 +20,7 @@ jobs:
       - run: bun run check
       # The tests built dist/land and ran it, so the release ships the binary they tested.
       - run: mv dist/land "dist/land-$(uname -s)-$(uname -m)"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: land-${{ matrix.os }}
           path: dist/land-*
@@ -31,8 +31,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
