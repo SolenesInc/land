@@ -81,6 +81,9 @@ land
 `land` stops before the push in these cases, and says why:
 
 - Your worktree has uncommitted changes. Commit or stash them.
+- Your worktree has untracked files that git does not ignore. The gate runs
+  in the worktree, so it could pass because of a file the landing does not
+  contain. Commit, remove or ignore each file that `land` names.
 - A commit's author is not your global git identity. Fix the commits as the
   message says.
 - The rebase onto `origin/main` conflicts. `land` aborts the rebase, so your

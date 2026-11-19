@@ -189,6 +189,18 @@ export const land = Effect.gen(function* () {
   if (!(yield* succeeds("diff", "--quiet")) || !(yield* succeeds("diff", "--cached", "--quiet"))) {
     return yield* new LandFailed({ message: "commit or stash your changes first" })
   }
+  // The gate runs in the worktree, so a file the landing does not contain could pass it.
+  const untracked = yield* gitOk("ls-files", "--others", "--exclude-standard", "--full-name", ":/")
+  if (untracked !== "") {
+    return yield* new LandFailed({
+      message: `the worktree has files the landing does not contain, so the gate could pass because of them:
+${untracked
+  .split("\n")
+  .map((file) => `  ${file}`)
+  .join("\n")}
+Commit, remove or ignore them, then run land again.`,
+    })
+  }
 
   yield* fetchMain(main)
   yield* refuseCommitsByAnotherAuthor(main)

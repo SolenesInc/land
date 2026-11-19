@@ -205,6 +205,22 @@ test("a land that is killed mid-landing does not stop the next land", async () =
   expect(w.main()).toBe(head)
 })
 
+test("an untracked file that the gate depends on stops the landing", async () => {
+  const w = world()
+  const lander = w.clone("lander")
+  const before = w.main()
+  w.commit(lander, "story.txt", "two\n")
+  writeFileSync(join(lander, "needed.txt"), "only in the worktree\n")
+
+  const landed = await w.land(lander, "test -f needed.txt")
+
+  expect(landed.status).toBe(1)
+  expect(landed.err).toBe(
+    "land: the worktree has files the landing does not contain, so the gate could pass because of them:\n  needed.txt\nCommit, remove or ignore them, then run land again.\n",
+  )
+  expect(w.main()).toBe(before)
+})
+
 test("a commit by another author is refused", async () => {
   const w = world()
   const lander = w.clone("lander")
