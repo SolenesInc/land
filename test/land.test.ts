@@ -112,6 +112,26 @@ test("a landing reaches main", async () => {
   expect(w.git(lander, "rev-parse", "origin/main")).toBe(head)
 })
 
+test("land loads no configuration from the repository it runs in", async () => {
+  const w = world()
+  const lander = w.clone("lander")
+  // A Bun binary would otherwise load these from its working directory and fail on the preload.
+  w.commit(lander, "bunfig.toml", 'preload = ["./missing-preload.ts"]\n')
+  w.commit(lander, ".env", "FROM_DOTENV=set\n")
+  const head = w.git(lander, "rev-parse", "HEAD")
+
+  const version = Bun.spawnSync([bin, "--version"], { cwd: lander, stdout: "pipe", stderr: "pipe" })
+  expect({ status: version.exitCode, out: version.stdout.toString(), err: version.stderr.toString() }).toEqual({
+    status: 0,
+    out: `land ${(await Bun.file(join(root, "package.json")).json()).version}\n`,
+    err: "",
+  })
+  const landed = await w.land(lander, 'test -z "$FROM_DOTENV"')
+
+  expect(landed).toMatchObject({ status: 0, err: "" })
+  expect(w.main()).toBe(head)
+})
+
 test("a failing gate pushes nothing, and land exits with the gate's status", async () => {
   const w = world()
   const lander = w.clone("lander")
