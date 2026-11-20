@@ -87,6 +87,32 @@ clone's `.git/hooks`, so every worktree has them:
 `land` installs no hook when the clone sets `core.hooksPath`, and leaves a
 hook of the same name that it did not install. It says so on every landing.
 
+## Record the change
+
+`land record [args]` captures what a change looks like, and prints the
+markdown that links it:
+
+```text
+$ land record login
+![login](.land/media/login.png)
+```
+
+The repository supplies the capture, as the `record` key in `land.toml`: a
+shell command that writes its recordings into `$LAND_MEDIA`. `land` runs it
+with `sh -c` at the repository root, with `LAND_MEDIA` set to the absolute path
+of `.land/media/` and the arguments you passed appended. It then prints
+`![<name>](.land/media/<file>)` for each file the command created or wrote
+again, in name order. The command's own output goes to stderr, so stdout holds
+only those lines. When the command fails, `land` exits with its status and
+prints no line. With no `record` key it fails and names the key.
+
+```toml
+record = "scripts/record.sh"
+```
+
+`land` adds `.land/` to the clone's `.git/info/exclude`, so the recordings
+never block a landing and no repository commits an ignore rule.
+
 ## Keep main healthy
 
 A landing passes the gate, but CI on `main` runs the whole check and can still

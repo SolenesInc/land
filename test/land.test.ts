@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -512,4 +512,63 @@ test("land leaves another prepare-commit-msg hook as it is, and says so", async 
   )
   expect(hookFiles(w, lander)[1]).toBe(foreign)
   expect(hookFiles(w, lander)[0]).toContain("# Installed by land.")
+})
+
+// A record command that writes one file per argument into LAND_MEDIA, and says where it ran.
+const withRecord = (w: ReturnType<typeof world>, script: string) => {
+  const lander = w.clone("lander")
+  writeFileSync(join(lander, "land.toml"), `gate = 'eval "$TEST_GATE"'\nrecord = "sh record.sh"\n`)
+  writeFileSync(join(lander, "record.sh"), script)
+  w.git(lander, "add", ".")
+  w.git(lander, "commit", "--quiet", "-m", "Declare record")
+  return lander
+}
+const runLand = (w: ReturnType<typeof world>, cwd: string, ...args: string[]): Result => {
+  const ran = Bun.spawnSync([bin, ...args], { cwd, env: w.env, stdout: "pipe", stderr: "pipe" })
+  return { status: ran.exitCode, out: ran.stdout.toString(), err: ran.stderr.toString() }
+}
+
+test("land record prints one markdown line per new recording, and the repository still lands", async () => {
+  const w = world()
+  const lander = withRecord(w, 'for name in "$@"; do echo shot > "$LAND_MEDIA/$name"; done; echo "ran in $PWD"\n')
+  mkdirSync(join(lander, "src"))
+
+  const first = runLand(w, join(lander, "src"), "record", "one.png", "two shots.gif")
+
+  expect(first.status).toBe(0)
+  expect(first.out).toBe("![one](.land/media/one.png)\n![two shots](.land/media/two shots.gif)\n")
+  expect(first.err).toContain(`ran in ${realpathSync(lander)}`)
+  expect(readFileSync(join(lander, ".land", "media", "one.png"), "utf8")).toBe("shot\n")
+
+  // Only what this run recorded is new.
+  const second = runLand(w, lander, "record", "three.png")
+  expect(second.out).toBe("![three](.land/media/three.png)\n")
+
+  // .land/ is excluded in the clone, so the untracked-file check never sees the recordings.
+  w.commit(lander, "story.txt", "two\n")
+  const landed = await w.land(lander)
+  expect(landed).toMatchObject({ status: 0 })
+  expect(w.git(lander, "status", "--porcelain")).toBe("")
+})
+
+test("land record names the key when the declaration has no record command", () => {
+  const w = world()
+  const lander = w.clone("lander")
+
+  const ran = runLand(w, lander, "record")
+
+  expect(ran.status).toBe(1)
+  expect(ran.out).toBe("")
+  expect(ran.err).toContain("land: land.toml names no record command; add the key, for example:\n  record = ")
+})
+
+test("a failing record command makes land exit with its status and print no line", () => {
+  const w = world()
+  const lander = withRecord(w, 'echo shot > "$LAND_MEDIA/partial.png"; exit 7\n')
+
+  const ran = runLand(w, lander, "record")
+
+  expect(ran.status).toBe(7)
+  expect(ran.out).toBe("")
+  expect(ran.err).toContain("failed with status 7")
 })

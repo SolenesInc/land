@@ -10,6 +10,8 @@ branch other than `main` to land on.
   pushes only when it exits 0.
 - `decl-no-gate` lands with no check when the file names no gate.
 - `decl-main` lands on the branch that `main` names.
+- `decl-record` names the `record` command that `land record` runs; see
+  [Record](record.md).
 - `decl-missing` refuses to land in a repository with no `land.toml`.
 - `decl-unknown-key` refuses a key it does not know, so a misspelled `gate`
   never lands unchecked.
