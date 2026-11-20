@@ -1,0 +1,1 @@
+Every landing now pushes `main` with a landing ref, `refs/landings/<head>`, in one atomic push: its commit holds `landing.json` and this note, written in `.land/note.md` or named with `land --note <file>`.
