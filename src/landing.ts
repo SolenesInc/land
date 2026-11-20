@@ -6,7 +6,7 @@ import { readDeclaration } from "./declaration.ts"
 import { LandFailed } from "./failure.ts"
 import { git, gitOk, gitWith, run, succeeds } from "./git.ts"
 import { deleteNote, findNote, type Note } from "./note.ts"
-import { excludeLandDir } from "./record.ts"
+import { excludeLandDir } from "./land-dir.ts"
 import type { LandingRecord } from "./schema.ts"
 import { version } from "../package.json"
 

@@ -3,9 +3,7 @@ import { resolve } from "node:path"
 import { Effect } from "effect"
 import { LandFailed } from "./failure.ts"
 import { succeeds } from "./git.ts"
-
-// The lander's folder in the worktree. It holds the note, and git never sees it.
-const folder = ".land/"
+import { landDir } from "./land-dir.ts"
 
 export type Note = {
   readonly shown: string // the path as the lander knows it
@@ -16,7 +14,7 @@ export type Note = {
 // The note the lander wrote: the file --note names, or .land/note.md when it exists.
 export const findNote = (root: string, named: string | undefined) =>
   Effect.gen(function* () {
-    const shown = named ?? `${folder}note.md`
+    const shown = named ?? `${landDir}/note.md`
     const path = named === undefined ? `${root}/${shown}` : resolve(named)
     const text = yield* Effect.promise(() => readFile(path, "utf8").catch(() => undefined))
     if (text === undefined) {

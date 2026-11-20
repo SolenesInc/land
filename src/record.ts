@@ -1,24 +1,11 @@
-import { mkdir, readdir, readFile, appendFile, stat } from "node:fs/promises"
-import { dirname, join } from "node:path"
+import { mkdir, readdir, stat } from "node:fs/promises"
+import { join } from "node:path"
 import { constants } from "node:os"
 import { Effect } from "effect"
 import { readDeclaration } from "./declaration.ts"
 import { LandFailed } from "./failure.ts"
 import { gitOk } from "./git.ts"
-
-const land = ".land"
-
-// land keeps its files in .land/, which no repository commits an ignore rule for: the
-// clone's exclude file hides it from the untracked-file check.
-export const excludeLandDir = Effect.gen(function* () {
-  const path = yield* gitOk("rev-parse", "--path-format=absolute", "--git-path", "info/exclude")
-  const text = yield* Effect.promise(() => readFile(path, "utf8").catch(() => ""))
-  if (text.split(/\r?\n/).includes(`${land}/`)) return
-  yield* Effect.promise(async () => {
-    await mkdir(dirname(path), { recursive: true })
-    await appendFile(path, `${text === "" || text.endsWith("\n") ? "" : "\n"}${land}/\n`)
-  })
-})
+import { excludeLandDir, landDir } from "./land-dir.ts"
 
 // A file counts as recorded when the command created it or wrote it again. The media
 // directory is flat: a directory or a dotfile in it is not a recording.
@@ -32,7 +19,7 @@ const snapshot = (dir: string) =>
     return files
   })
 
-const link = (name: string) => `![${name.replace(/\.[^.]*$/, "")}](${land}/media/${encodeURIComponent(name)})`
+const link = (name: string) => `![${name.replace(/\.[^.]*$/, "")}](${landDir}/media/${encodeURIComponent(name)})`
 
 export const record = (args: ReadonlyArray<string>) =>
   Effect.gen(function* () {
@@ -44,7 +31,7 @@ export const record = (args: ReadonlyArray<string>) =>
   record = "scripts/record.sh"   a shell command that writes recordings into $LAND_MEDIA`,
       })
     }
-    const media = join(root, land, "media")
+    const media = join(root, landDir, "media")
     yield* Effect.promise(() => mkdir(media, { recursive: true }))
     yield* excludeLandDir
     const before = yield* snapshot(media)
