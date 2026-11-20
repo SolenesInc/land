@@ -109,7 +109,9 @@ gh api repos/{owner}/{repo}/commits/<sha> --jq .author.login
 ```
 
 The last command gives the GitHub login of a commit's author, which an issue
-needs to assign it.
+needs to assign it. It prints `null` when the commit's email belongs to no
+GitHub account. Then name the author by name and email in the comment, and
+leave the issue unassigned.
 
 Match the failing test to the commits' changes. An intermittent failure's cause
 can predate the green run: one passing run does not clear a commit. `main` may
