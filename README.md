@@ -33,24 +33,45 @@ Put `~/.local/bin` on your `PATH`, then check the install with `land --version`.
 
 ## Adopt land in a repository
 
-1. Add `land.toml` at the repository root. It names the gate: the fast checks
-   that must pass before a push.
+Run `land init` at the root of a clone:
 
-   ```toml
-   gate = "bun run check"
-   ```
+```text
+$ land init
+land: land.toml  wrote gate = "bun run check", from the check script in package.json
+land: AGENTS.md  added the trunk declaration under ## Landing
+
+Decide:
+  - Whether bun run check should run before every push. It holds every landing until it passes, so name a faster check in land.toml if it is slow, and leave the rest to CI.
+
+Then commit land.toml and AGENTS.md, and land the commit with land.
+```
+
+It writes two things, and never overwrites either:
+
+1. `land.toml`, which names the gate: the checks that must pass before a push.
+   `land init` proposes the first of these it finds: a `check` script in
+   `package.json`, a `check` target in the `Makefile`, a `test` script, a
+   `test` target, `go test ./...` for a `go.mod`, or `cargo test` for a
+   `Cargo.toml`. When it finds none, it writes no `land.toml` and asks you to
+   name the gate. When the clone's `origin/HEAD` names a branch other than
+   `main`, it adds `main = "<branch>"`. A clone made with `git clone` has
+   `origin/HEAD`; set it in another with `git remote set-head origin --auto`.
 
    `land` runs the gate with `sh -c` at the repository root, and sets
    `LAND_BASE` to the `origin/main` commit the landing sits on and `LAND_HEAD`
-   to the commit it pushes. To land on a branch other than `main`, add
-   `main = "<branch>"`. Leave `gate` out only if the repository has no checks.
+   to the commit it pushes. Leave `gate` out only if the repository has no
+   checks.
 
-2. Add these two lines to the repository's agent guidance, such as `AGENTS.md`:
+2. The trunk declaration, two lines appended under `## Landing` to
+   `AGENTS.md`, or to `CLAUDE.md` when only that exists. With neither, it
+   creates `AGENTS.md` holding only the two lines.
 
    ```markdown
    This repository lands on `main` with `land`, with no pull request.
    Before you land a change, run `land guide` and follow it.
    ```
+
+A second `land init` changes nothing.
 
 The first `land` in a clone installs a pre-push hook that refuses a plain
 `git push` to `main`. `land` installs no hook when the clone sets

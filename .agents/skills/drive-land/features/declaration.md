@@ -23,7 +23,7 @@ branch other than `main` to land on.
 ### People
 
 - Write `land.toml` at the repository root and commit it
-  (`src/declaration.ts`). The README's "Adopt land in a repository" says how.
+  (`src/declaration.ts`), or let `land init` write it (see [Init](init.md)).
 
 ### Agents
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, expect, test } from "bun:test"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -19,7 +19,7 @@ afterEach(() => {
 
 type Result = { status: number; out: string; err: string }
 
-const world = () => {
+const world = ({ declared = true } = {}) => {
   const dir = mkdtempSync(join(tmpdir(), "land-test-"))
   worlds.push(dir)
   writeFileSync(
@@ -53,7 +53,7 @@ const world = () => {
 
   // The gate runs whatever the test puts in TEST_GATE.
   const seed = clone("seed")
-  writeFileSync(join(seed, "land.toml"), `gate = 'eval "$TEST_GATE"'\n`)
+  if (declared) writeFileSync(join(seed, "land.toml"), `gate = 'eval "$TEST_GATE"'\n`)
   writeFileSync(join(seed, "story.txt"), "one\n")
   git(seed, "add", ".")
   git(seed, "commit", "--quiet", "-m", "Start")
@@ -79,6 +79,10 @@ const world = () => {
     return { child, result }
   }
   const land = (cwd: string, gate = "true") => start(cwd, gate).result
+  const landInit = (cwd: string): Result => {
+    const ran = Bun.spawnSync([bin, "init"], { cwd, env, stdout: "pipe", stderr: "pipe" })
+    return { status: ran.exitCode, out: ran.stdout.toString(), err: ran.stderr.toString() }
+  }
 
   const main = () => git(origin, "rev-parse", "main")
 
@@ -95,7 +99,7 @@ const world = () => {
     }
   }
 
-  return { dir, git, tryGit, clone, commit, start, land, main, holdGate }
+  return { dir, git, tryGit, clone, commit, start, land, landInit, main, holdGate }
 }
 
 test("a landing reaches main", async () => {
@@ -279,4 +283,127 @@ test("a second land prints nothing to land", async () => {
   const again = await w.land(lander, "exit 9")
 
   expect(again).toEqual({ status: 0, out: "land: nothing to land\n", err: "" })
+})
+
+const read = (path: string) => (existsSync(path) ? readFileSync(path, "utf8") : undefined)
+
+test("land init writes land.toml and the trunk declaration, and the repository then lands", async () => {
+  const w = world({ declared: false })
+  const lander = w.clone("lander")
+  w.commit(lander, "package.json", JSON.stringify({ scripts: { check: "echo checked" } }))
+  w.commit(lander, "bun.lock", "")
+  w.commit(lander, "AGENTS.md", "# Project\n\nSome guidance.\n")
+
+  const first = w.landInit(lander)
+
+  expect(first).toMatchObject({ status: 0, err: "" })
+  expect(read(join(lander, "land.toml"))).toBe('gate = "bun run check"\n')
+  expect(read(join(lander, "AGENTS.md"))).toBe(
+    "# Project\n\nSome guidance.\n\n## Landing\n\nThis repository lands on `main` with `land`, with no pull request.\nBefore you land a change, run `land guide` and follow it.\n",
+  )
+  expect(first.out).toContain('land: land.toml  wrote gate = "bun run check", from the check script in package.json')
+  expect(first.out).toContain("Then commit land.toml and AGENTS.md, and land the commit with land.")
+
+  w.git(lander, "add", "land.toml", "AGENTS.md")
+  w.git(lander, "commit", "--quiet", "-m", "Land with land")
+  const landed = await w.land(lander)
+  expect(landed.status).toBe(0)
+  expect(landed.out).toContain("land: gate   bun run check   ok in")
+  expect(w.main()).toBe(w.git(lander, "rev-parse", "HEAD"))
+})
+
+test("a second land init changes nothing", () => {
+  const w = world({ declared: false })
+  const lander = w.clone("lander")
+  w.commit(lander, "Makefile", "check:\n\ttrue\n")
+  expect(w.landInit(lander).status).toBe(0)
+  const files = () => ({ toml: read(join(lander, "land.toml")), agents: read(join(lander, "AGENTS.md")) })
+  const before = files()
+
+  const again = w.landInit(lander)
+
+  expect(again).toEqual({
+    status: 0,
+    out: "land: land.toml  exists, so land left it as it is\nland: AGENTS.md  already declares that the repository lands with land\n\nNothing changed.\n",
+    err: "",
+  })
+  expect(files()).toEqual(before)
+})
+
+test("land init leaves an existing land.toml as it is", () => {
+  const w = world()
+  const lander = w.clone("lander")
+  w.commit(lander, "CLAUDE.md", "# Project\n")
+  w.commit(lander, "package.json", JSON.stringify({ scripts: { check: "true" } }))
+  const before = read(join(lander, "land.toml"))
+
+  const ran = w.landInit(lander)
+
+  expect(ran.status).toBe(0)
+  expect(read(join(lander, "land.toml"))).toBe(before)
+  expect(read(join(lander, "CLAUDE.md"))).toContain("## Landing\n\nThis repository lands on `main` with `land`")
+  expect(read(join(lander, "AGENTS.md"))).toBeUndefined()
+  expect(ran.out).toContain("Then commit CLAUDE.md, and land the commit with land.")
+})
+
+test("land init proposes the gate from what the repository has", () => {
+  const cases: ReadonlyArray<{ files: Record<string, string>; toml: string | undefined }> = [
+    { files: { Makefile: "build:\n\ttrue\ncheck: build\n\ttrue\n" }, toml: 'gate = "make check"\n' },
+    { files: { Makefile: "test:\n\ttrue\n" }, toml: 'gate = "make test"\n' },
+    {
+      files: { "package.json": JSON.stringify({ scripts: { test: "true" } }), "pnpm-lock.yaml": "" },
+      toml: 'gate = "pnpm run test"\n',
+    },
+    {
+      files: { "package.json": JSON.stringify({ scripts: { check: "true" } }), Makefile: "check:\n" },
+      toml: 'gate = "npm run check"\n',
+    },
+    { files: { "go.mod": "module example.com/x\n" }, toml: 'gate = "go test ./..."\n' },
+    { files: { "Cargo.toml": "[package]\n" }, toml: 'gate = "cargo test"\n' },
+    { files: { "README.md": "# Nothing to run\n" }, toml: undefined },
+    { files: { Makefile: "check := x\ntest:\n\ttrue\n" }, toml: 'gate = "make test"\n' },
+    {
+      files: { "package.json": JSON.stringify({ scripts: { test: 'echo "Error: no test specified" && exit 1' } }) },
+      toml: undefined,
+    },
+  ]
+  for (const { files, toml } of cases) {
+    const w = world({ declared: false })
+    const lander = w.clone("lander")
+    for (const [name, text] of Object.entries(files)) w.commit(lander, name, text)
+
+    const ran = w.landInit(lander)
+
+    expect({ files, status: ran.status, toml: read(join(lander, "land.toml")) }).toEqual({ files, status: 0, toml })
+    expect(read(join(lander, "AGENTS.md"))).toContain("run `land guide` and follow it.")
+  }
+})
+
+test("land init names the branch origin lands on when it is not main", () => {
+  const w = world({ declared: false })
+  w.git(join(w.dir, "seed"), "push", "--quiet", "origin", "HEAD:master")
+  w.git(join(w.dir, "origin.git"), "symbolic-ref", "HEAD", "refs/heads/master")
+  const lander = w.clone("lander")
+  w.commit(lander, "go.mod", "module example.com/x\n")
+
+  const ran = w.landInit(lander)
+
+  expect(ran.status).toBe(0)
+  expect(read(join(lander, "land.toml"))).toBe('gate = "go test ./..."\nmain = "master"\n')
+  expect(read(join(lander, "AGENTS.md"))).toBe(
+    "This repository lands on `master` with `land`, with no pull request.\nBefore you land a change, run `land guide` and follow it.\n",
+  )
+})
+
+test("land init names a package.json it cannot parse, and writes nothing", () => {
+  const w = world({ declared: false })
+  const lander = w.clone("lander")
+  w.commit(lander, "package.json", "{broken")
+
+  const ran = w.landInit(lander)
+
+  expect(ran.status).toBe(1)
+  expect(ran.err).toStartWith("land: package.json: SyntaxError:")
+  expect(read(join(lander, "land.toml"))).toBeUndefined()
+  expect(read(join(lander, "AGENTS.md"))).toBeUndefined()
 })

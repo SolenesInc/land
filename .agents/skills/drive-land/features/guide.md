@@ -23,7 +23,7 @@ it, and holds no copy. `land --help` says what the command takes and what
 ### Agents
 
 - A repository's guidance says "Before you land a change, run `land guide` and
-  follow it." The README's "Adopt land in a repository" gives those two lines.
+  follow it." `land init` writes those two lines; see [Init](init.md).
 
 ## Driving it
 
@@ -36,8 +36,8 @@ Preconditions:
   and Report. It exits 0.
 - **Version and help.** Run `drive.ts r do home 'land --version'`: it prints
   `land <version>`, the version in `package.json`. Run
-  `drive.ts r do home 'land --help'`: it lists `land`, `land guide`,
-  `land --help`, `land --version`, and the keys `gate` and `main`.
+  `drive.ts r do home 'land --help'`: it lists `land`, `land init`,
+  `land guide`, `land --help`, `land --version`, and the keys `gate` and `main`.
 - **Unknown arguments.** Run `drive.ts r do home 'land nonsense'`. It prints
   `land: unknown arguments: nonsense` and the help, and exits 2.
 - **Proof.** The saved guide, and the saved output of the three commands.

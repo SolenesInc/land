@@ -1,5 +1,7 @@
 import { Cause, Effect, Exit } from "effect"
+import type { LandFailed } from "./failure.ts"
 import guide from "./guide.md" with { type: "text" }
+import { init } from "./init.ts"
 import { land } from "./landing.ts"
 import { version } from "../package.json"
 
@@ -8,6 +10,7 @@ gate that land.toml names, and pushes.
 
 Usage:
   land             land the commits of the current branch
+  land init        adopt land in this repository: write land.toml and the trunk declaration
   land guide       print the procedure for landing a change
   land --help      print this help
   land --version   print land's version
@@ -17,8 +20,8 @@ land.toml, at the repository root:
   main = "main"            the branch to land on; "main" when absent
 `
 
-const landing = async () => {
-  const exit = await Effect.runPromiseExit(land)
+const report = async (command: Effect.Effect<void, LandFailed>) => {
+  const exit = await Effect.runPromiseExit(command)
   if (Exit.isSuccess(exit)) return 0
   const failure = exit.cause.reasons.find(Cause.isFailReason)
   if (failure === undefined) {
@@ -32,7 +35,9 @@ const landing = async () => {
 const main = async (args: ReadonlyArray<string>) => {
   switch (args.join(" ")) {
     case "":
-      return landing()
+      return report(land)
+    case "init":
+      return report(init)
     case "guide":
       process.stdout.write(guide)
       return 0

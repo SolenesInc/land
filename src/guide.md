@@ -6,9 +6,11 @@ branch onto `origin/main`, runs the gate that `land.toml` names, and pushes.
 Your work ends when `land` pushes. After that, CI on `main` runs the
 repository's whole check.
 
-These steps hold in every repository that lands with `land`. The repository's
-own guidance names its checks, its review skills and anything it adds to a
-step. Where the two disagree, the repository's guidance wins.
+These steps hold in every repository that lands with `land`. A repository
+adopts `land` with `land init`, which writes `land.toml` and the two lines of
+guidance that point here. The repository's own guidance names its checks, its
+review skills and anything it adds to a step. Where the two disagree, the
+repository's guidance wins.
 
 ## Branch
 

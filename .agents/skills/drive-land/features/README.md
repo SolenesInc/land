@@ -10,6 +10,7 @@ repository root.
 | Audience | Ways in                                                                                            | Source                            |
 | -------- | -------------------------------------------------------------------------------------------------- | --------------------------------- |
 | People   | The `land` command in their own shell, in a clone of a repository that has a `land.toml`           | `src/main.ts`, `src/landing.ts`   |
+| People   | `land init`, in a clone of a repository that does not land with `land` yet                         | `src/init.ts`                     |
 | Agents   | The same command, and the text of `land guide`, which a repository's guidance tells them to follow | `src/main.ts`, `src/guide.md`     |
 | Git      | The pre-push hook that `land` installs, which git runs on every push                               | `installHook` in `src/landing.ts` |
 | CI       | The workflow that publishes a release when a landing changes the version                           | `.github/workflows/ci.yml`        |
@@ -74,10 +75,11 @@ commands, messages, state and proof.
 
 ## Index
 
-| Feature                       | Audiences           | What it is for                                                           |
-| ----------------------------- | ------------------- | ------------------------------------------------------------------------ |
-| [Landing](landing.md)         | People, agents      | Put finished commits on `main`: rebase, gate, push, or stop and say why  |
-| [Declaration](declaration.md) | People, agents      | Tell `land` what a repository's gate is, in `land.toml`                  |
-| [Push hook](push-hook.md)     | People, agents, git | Refuse a plain `git push` to `main`, so changes go through the gate      |
-| [Guide and help](guide.md)    | People, agents      | Tell a lander the procedure around a landing, and what the command takes |
-| [Install](install.md)         | People, agents, CI  | Get `land` onto a machine that has no Bun, and publish each new version  |
+| Feature                       | Audiences           | What it is for                                                            |
+| ----------------------------- | ------------------- | ------------------------------------------------------------------------- |
+| [Landing](landing.md)         | People, agents      | Put finished commits on `main`: rebase, gate, push, or stop and say why   |
+| [Declaration](declaration.md) | People, agents      | Tell `land` what a repository's gate is, in `land.toml`                   |
+| [Init](init.md)               | People, agents      | Adopt `land` in a repository: write `land.toml` and the trunk declaration |
+| [Push hook](push-hook.md)     | People, agents, git | Refuse a plain `git push` to `main`, so changes go through the gate       |
+| [Guide and help](guide.md)    | People, agents      | Tell a lander the procedure around a landing, and what the command takes  |
+| [Install](install.md)         | People, agents, CI  | Get `land` onto a machine that has no Bun, and publish each new version   |
