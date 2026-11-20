@@ -11,7 +11,7 @@ repository's.
   repository root, with `LAND_MEDIA` set to the absolute path of
   `.land/media/` (created when missing) and the arguments appended.
 - `record-lines` prints `![<name without extension>](.land/media/<file>)` for
-  each file the command created or wrote again, sorted by name. The command's
+  each file the command created or wrote again, sorted by name, with the file name percent-encoded in the link. Dotfiles and directories in `.land/media/` are not recordings. The command's
   own stdout goes to stderr, so stdout holds only those lines.
 - `record-no-key` fails when `land.toml` has no `record` key, names the key and
   shows an example.
@@ -42,7 +42,7 @@ Preconditions:
 - **Recordings.** From a subdirectory, run
   `drive.ts r do lander 'mkdir -p src && cd src && land record one.png "two shots.gif"'`.
   It prints `![one](.land/media/one.png)` and
-  `![two shots](.land/media/two shots.gif)`, and exits 0. Run
+  `![two shots](.land/media/two%20shots.gif)`, and exits 0. Run
   `drive.ts r do lander 'ls .land/media && git status --short'`: both files
   are there, and the status is empty.
 - **Only new files.** Run `drive.ts r do lander 'land record three.png'`. It
@@ -78,4 +78,5 @@ Preconditions:
 - A recording that the command writes again under the same name counts as
   new, so a re-record prints its line again.
 - Arguments are appended to the last command of the `record` string, as
-  `"$@"`. A `record` with a pipe or `;` receives them on its last part.
+  `"$@"`. A `record` with a pipe or `;` receives them on its last part. A string that ends in `;` or in a `#` comment
+  breaks the appended `"$@"`.

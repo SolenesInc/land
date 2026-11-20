@@ -20,15 +20,19 @@ export const excludeLandDir = Effect.gen(function* () {
   })
 })
 
-// A file counts as recorded when the command created it or wrote it again.
+// A file counts as recorded when the command created it or wrote it again. The media
+// directory is flat: a directory or a dotfile in it is not a recording.
 const snapshot = (dir: string) =>
   Effect.promise(async () => {
     const files = new Map<string, number>()
-    for (const name of await readdir(dir)) files.set(name, (await stat(join(dir, name))).mtimeMs)
+    for (const name of await readdir(dir)) {
+      const info = await stat(join(dir, name))
+      if (info.isFile() && !name.startsWith(".")) files.set(name, info.mtimeMs)
+    }
     return files
   })
 
-const link = (name: string) => `![${name.replace(/\.[^.]*$/, "")}](${land}/media/${name})`
+const link = (name: string) => `![${name.replace(/\.[^.]*$/, "")}](${land}/media/${encodeURIComponent(name)})`
 
 export const record = (args: ReadonlyArray<string>) =>
   Effect.gen(function* () {

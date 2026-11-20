@@ -530,13 +530,16 @@ const runLand = (w: ReturnType<typeof world>, cwd: string, ...args: string[]): R
 
 test("land record prints one markdown line per new recording, and the repository still lands", async () => {
   const w = world()
-  const lander = withRecord(w, 'for name in "$@"; do echo shot > "$LAND_MEDIA/$name"; done; echo "ran in $PWD"\n')
+  const lander = withRecord(
+    w,
+    'for name in "$@"; do echo shot > "$LAND_MEDIA/$name"; done; echo x > "$LAND_MEDIA/.hidden"; mkdir -p "$LAND_MEDIA/sub"; echo "ran in $PWD"\n',
+  )
   mkdirSync(join(lander, "src"))
 
   const first = runLand(w, join(lander, "src"), "record", "one.png", "two shots.gif")
 
   expect(first.status).toBe(0)
-  expect(first.out).toBe("![one](.land/media/one.png)\n![two shots](.land/media/two shots.gif)\n")
+  expect(first.out).toBe("![one](.land/media/one.png)\n![two shots](.land/media/two%20shots.gif)\n")
   expect(first.err).toContain(`ran in ${realpathSync(lander)}`)
   expect(readFileSync(join(lander, ".land", "media", "one.png"), "utf8")).toBe("shot\n")
 
