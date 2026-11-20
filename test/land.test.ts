@@ -136,6 +136,21 @@ test("land loads no configuration from the repository it runs in", async () => {
   expect(w.main()).toBe(head)
 })
 
+test("land guide review and land guide sheriff print procedures that any runner can follow", () => {
+  for (const [topic, heading] of [
+    ["review", "# Review main\n"],
+    ["sheriff", "# Sheriff\n"],
+  ]) {
+    const printed = Bun.spawnSync([bin, "guide", topic], { stdout: "pipe", stderr: "pipe" })
+    const out = printed.stdout.toString()
+    expect({ status: printed.exitCode, err: printed.stderr.toString() }).toEqual({ status: 0, err: "" })
+    expect(out.startsWith(heading)).toBe(true)
+    expect(out).toContain(`.agents/land/${topic}.md`)
+    // The runner's prompt says how to delegate and message; the procedure names no attn command.
+    expect(out).not.toMatch(/\battn\b/)
+  }
+})
+
 test("a failing gate pushes nothing, and land exits with the gate's status", async () => {
   const w = world()
   const lander = w.clone("lander")

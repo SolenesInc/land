@@ -4,7 +4,8 @@ This repository lands changes straight on `main`, with no pull request. A
 landing is one push of finished commits through `land`. `land` rebases your
 branch onto `origin/main`, runs the gate that `land.toml` names, and pushes.
 Your work ends when `land` pushes. After that, CI on `main` runs the
-repository's whole check.
+repository's whole check, and the repository may review what landed and
+repair a red `main` (`land guide review`, `land guide sheriff`).
 
 These steps hold in every repository that lands with `land`. A repository
 adopts `land` with `land init`, which writes `land.toml` and the two lines of
@@ -117,4 +118,13 @@ Report where the work was asked for:
   refuted
 - any test that failed and passed on a second run
 
+## After the push
+
 Do not watch CI on `main` unless the repository's guidance asks you to.
+
+A reviewer or the sheriff may later tell you about your landing: a finding to
+fix, or a revert of your commit because it broke `main`. When one does, fix it
+the same way you landed it. Start a new branch from `origin/main`, make the
+fix, check it and land it with `land`. To land reverted work again, run
+`git revert <revert sha>` on that branch first, then fix the problem. Report
+the fix to whoever told you.

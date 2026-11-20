@@ -1,6 +1,8 @@
 import { Cause, Effect, Exit } from "effect"
 import type { LandFailed } from "./failure.ts"
 import guide from "./guide.md" with { type: "text" }
+import reviewGuide from "./guide-review.md" with { type: "text" }
+import sheriffGuide from "./guide-sheriff.md" with { type: "text" }
 import { init } from "./init.ts"
 import { land } from "./landing.ts"
 import { version } from "../package.json"
@@ -9,11 +11,13 @@ const help = `land lands finished commits on main: it rebases onto origin/main, 
 gate that land.toml names, and pushes.
 
 Usage:
-  land             land the commits of the current branch
-  land init        adopt land in this repository: write land.toml and the trunk declaration
-  land guide       print the procedure for landing a change
-  land --help      print this help
-  land --version   print land's version
+  land                 land the commits of the current branch
+  land init            adopt land in this repository: write land.toml and the trunk declaration
+  land guide           print the procedure for landing a change
+  land guide review    print the procedure for reviewing what landed on main
+  land guide sheriff   print the procedure for getting main's CI green
+  land --help          print this help
+  land --version       print land's version
 
 land.toml, at the repository root:
   gate = "bun run check"   a shell command; land pushes only when it exits 0
@@ -40,6 +44,12 @@ const main = async (args: ReadonlyArray<string>) => {
       return report(init)
     case "guide":
       process.stdout.write(guide)
+      return 0
+    case "guide review":
+      process.stdout.write(reviewGuide)
+      return 0
+    case "guide sheriff":
+      process.stdout.write(sheriffGuide)
       return 0
     case "--help":
     case "-h":
