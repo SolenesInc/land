@@ -7,13 +7,13 @@ repository root.
 
 ## Audiences
 
-| Audience | Ways in                                                                                            | Source                            |
-| -------- | -------------------------------------------------------------------------------------------------- | --------------------------------- |
-| People   | The `land` command in their own shell, in a clone of a repository that has a `land.toml`           | `src/main.ts`, `src/landing.ts`   |
-| People   | `land init`, in a clone of a repository that does not land with `land` yet                         | `src/init.ts`                     |
-| Agents   | The same command, and the text of `land guide`, which a repository's guidance tells them to follow | `src/main.ts`, `src/guide.md`     |
-| Git      | The pre-push hook that `land` installs, which git runs on every push                               | `installHook` in `src/landing.ts` |
-| CI       | The workflow that publishes a release when a landing changes the version                           | `.github/workflows/ci.yml`        |
+| Audience | Ways in                                                                                            | Source                             |
+| -------- | -------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| People   | The `land` command in their own shell, in a clone of a repository that has a `land.toml`           | `src/main.ts`, `src/landing.ts`    |
+| People   | `land init`, in a clone of a repository that does not land with `land` yet                         | `src/init.ts`                      |
+| Agents   | The same command, and the text of `land guide`, which a repository's guidance tells them to follow | `src/main.ts`, `src/guide.md`      |
+| Git      | The hooks that `land` installs: pre-push on every push, prepare-commit-msg on every commit         | `installHooks` in `src/landing.ts` |
+| CI       | The workflow that publishes a release when a landing changes the version                           | `.github/workflows/ci.yml`         |
 
 ## Baseline preconditions
 
@@ -69,17 +69,18 @@ commands, messages, state and proof.
 - **The repository's own configuration.** A repository can hold a
   `bunfig.toml`, a `.env`, a `tsconfig.json` or a `package.json`. `land` reads
   none of them.
-- **Hooks.** A clone can set `core.hooksPath`, or hold a pre-push hook of its
-  own.
+- **Hooks.** A clone can set `core.hooksPath`, or hold a pre-push or
+  prepare-commit-msg hook of its own.
 - **A branch other than `main`.** `land.toml` can name it.
 
 ## Index
 
-| Feature                       | Audiences           | What it is for                                                            |
-| ----------------------------- | ------------------- | ------------------------------------------------------------------------- |
-| [Landing](landing.md)         | People, agents      | Put finished commits on `main`: rebase, gate, push, or stop and say why   |
-| [Declaration](declaration.md) | People, agents      | Tell `land` what a repository's gate is, in `land.toml`                   |
-| [Init](init.md)               | People, agents      | Adopt `land` in a repository: write `land.toml` and the trunk declaration |
-| [Push hook](push-hook.md)     | People, agents, git | Refuse a plain `git push` to `main`, so changes go through the gate       |
-| [Guide and help](guide.md)    | People, agents      | Tell a lander the procedure around a landing, and what the command takes  |
-| [Install](install.md)         | People, agents, CI  | Get `land` onto a machine that has no Bun, and publish each new version   |
+| Feature                         | Audiences           | What it is for                                                            |
+| ------------------------------- | ------------------- | ------------------------------------------------------------------------- |
+| [Landing](landing.md)           | People, agents      | Put finished commits on `main`: rebase, gate, push, or stop and say why   |
+| [Declaration](declaration.md)   | People, agents      | Tell `land` what a repository's gate is, in `land.toml`                   |
+| [Init](init.md)                 | People, agents      | Adopt `land` in a repository: write `land.toml` and the trunk declaration |
+| [Push hook](push-hook.md)       | People, agents, git | Refuse a plain `git push` to `main`, so changes go through the gate       |
+| [Trailer hook](trailer-hook.md) | People, agents, git | Name the attn session and seeds a commit was made in, in its trailers     |
+| [Guide and help](guide.md)      | People, agents      | Tell a lander the procedure around a landing, and what the command takes  |
+| [Install](install.md)           | People, agents, CI  | Get `land` onto a machine that has no Bun, and publish each new version   |

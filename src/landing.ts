@@ -90,7 +90,8 @@ Rebase with git rebase origin/${main}, then run land again.`,
   })
 
 const hookMark = "# Installed by land."
-const hook = (main: string) => `#!/bin/sh
+
+const prePush = (main: string) => `#!/bin/sh
 ${hookMark} It refuses a plain push to ${main}.
 [ "$LAND_LANDING" = 1 ] && exit 0
 while read -r _ _ remote_ref _; do
@@ -102,28 +103,68 @@ done
 exit 0
 `
 
-const installHook = (main: string) =>
+// A port of attn's .githooks/prepare-commit-msg. It exits 0 on every path, so it
+// never fails a commit.
+const trailerHook = `#!/bin/sh
+${hookMark} It adds Attn-Session and Attn-Seed to a commit made in an attn session.
+message=$1
+[ "$ATTN_INSIDE_APP" = 1 ] || exit 0
+command -v attn >/dev/null 2>&1 || exit 0
+for replaying in rebase-merge rebase-apply; do
+  [ -e "$(git rev-parse --git-path "$replaying")" ] && exit 0
+done
+[ -n "$(git stripspace --strip-comments <"$message")" ] || exit 0
+session=$(attn presence --session-id 2>/dev/null) && [ -n "$session" ] || exit 0
+present=$(git interpret-trailers --parse "$message")
+set --
+printf '%s\\n' "$present" | grep -qi '^Attn-Session:' || set -- --trailer "Attn-Session: $session"
+if ! printf '%s\\n' "$present" | grep -qi '^Attn-Seed:' && seeds=$(attn presence --seed-ids 2>/dev/null); then
+  for seed in $seeds; do set -- "$@" --trailer "Attn-Seed: $seed"; done
+fi
+[ $# -gt 0 ] || exit 0
+git interpret-trailers --in-place --if-exists addIfDifferent "$@" "$message"
+exit 0
+`
+
+// Each hook land installs, and what a clone goes without when land cannot install it.
+const hooks = (main: string) => [
+  { name: "pre-push", text: prePush(main), without: `plain pushes to ${main} are not refused` },
+  { name: "prepare-commit-msg", text: trailerHook, without: "land adds no attn trailers to commits" },
+]
+
+// Install land's hooks in the clone's shared hooks folder, so every worktree has them.
+// Returns the names of the hooks this call installed.
+export const installHooks = (main: string) =>
   Effect.gen(function* () {
-    const unrefused = `plain pushes to ${main} are not refused`
-    const hooksPath = yield* git("config", "--get", "core.hooksPath")
-    if (hooksPath.status === 0) {
-      return yield* warn(`core.hooksPath is set, so land installs no pre-push hook and ${unrefused}`)
+    const installed: string[] = []
+    const all = hooks(main)
+    if ((yield* git("config", "--get", "core.hooksPath")).status === 0) {
+      yield* warn(`core.hooksPath is set, so land installs no hooks: ${all.map((hook) => hook.without).join(", and ")}`)
+      return installed
     }
     const commonDir = yield* gitOk("rev-parse", "--path-format=absolute", "--git-common-dir")
-    const path = `${commonDir}/hooks/pre-push`
-    const existing = Bun.file(path)
-    if (yield* Effect.promise(() => existing.exists())) {
-      const text = yield* Effect.promise(() => existing.text())
-      if (!text.includes(hookMark)) yield* warn(`${path} is not land's hook, so ${unrefused}`)
-      return
-    }
-    yield* Effect.promise(async () => {
-      await mkdir(`${commonDir}/hooks`, { recursive: true })
+    yield* Effect.promise(() => mkdir(`${commonDir}/hooks`, { recursive: true }))
+    for (const hook of all) {
+      const path = `${commonDir}/hooks/${hook.name}`
+      const existing = Bun.file(path)
+      if (yield* Effect.promise(() => existing.exists())) {
+        const text = yield* Effect.promise(() => existing.text())
+        if (!text.includes(hookMark)) yield* warn(`${path} is not land's hook, so ${hook.without}`)
+        continue
+      }
       // Exclusive create: when two lands race, the second finds the first's hook.
-      await writeFile(path, hook(main), { flag: "wx", mode: 0o755 }).catch((error: NodeJS.ErrnoException) => {
-        if (error.code !== "EEXIST") throw error
-      })
-    })
+      const created = yield* Effect.promise(() =>
+        writeFile(path, hook.text, { flag: "wx", mode: 0o755 }).then(
+          () => true,
+          (error: NodeJS.ErrnoException) => {
+            if (error.code !== "EEXIST") throw error
+            return false
+          },
+        ),
+      )
+      if (created) installed.push(hook.name)
+    }
+    return installed
   })
 
 const duration = (ms: number) => {
@@ -179,7 +220,7 @@ Commit, remove or ignore them, then run land again.`,
   yield* refuseCommitsByAnotherAuthor(main)
   yield* rebaseOntoMain(main)
   if ((yield* gitOk("rev-list", "--count", `${landRef(main)}..HEAD`)) === "0") return yield* say("nothing to land")
-  yield* installHook(main)
+  yield* installHooks(main)
 
   const checked = yield* short("HEAD")
   if (declaration.gate !== undefined) {

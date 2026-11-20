@@ -14,7 +14,7 @@ the gate, unless someone decides to push past it.
 - `hook-other-branch` lets a push to any other branch through.
 - `hook-no-verify` lets `git push --no-verify` through.
 - `hook-hookspath` installs nothing in a clone that sets `core.hooksPath`, and
-  says on every landing that plain pushes are not refused.
+  says on every landing that it installs no hooks.
 - `hook-foreign` leaves another pre-push hook as it is, and says on every
   landing that plain pushes are not refused.
 
@@ -31,8 +31,8 @@ the gate, unless someone decides to push past it.
 
 ### Triggers
 
-- `land` installs the hook during a landing (`installHook` in
-  `src/landing.ts`). Git runs the hook on every push.
+- `land` installs the hook during a landing, and `land init` installs it
+  (`installHooks` in `src/landing.ts`). Git runs the hook on every push.
 
 ## Driving it
 
@@ -62,7 +62,7 @@ Preconditions:
 - **A clone with `core.hooksPath`.** Run `drive.ts r clone hp`, then
   `drive.ts r do hp 'git config core.hooksPath .githooks && git switch -qc work && echo x >> story.txt && git commit -qam "From a clone with core.hooksPath" && land'`.
   It lands, and prints
-  `land: core.hooksPath is set, so land installs no pre-push hook and plain pushes to main are not refused`.
+  `land: core.hooksPath is set, so land installs no hooks: plain pushes to main are not refused, and land adds no attn trailers to commits`.
 - **A clone with its own hook.** Run `drive.ts r clone fh`, then
   `drive.ts r do fh 'printf "#!/bin/sh\nexit 0\n" > .git/hooks/pre-push && chmod +x .git/hooks/pre-push && git switch -qc work && echo y >> story.txt && git commit -qam "From a clone with its own hook" && land'`.
   It lands, and prints
@@ -85,6 +85,9 @@ Preconditions:
   the clone".
 
 ## Gotchas
+
+- `land` installs the [Trailer hook](trailer-hook.md) by the same rules, at
+  the same moment.
 
 - Nothing on the remote enforces the hook. A clone where `land` never landed
   pushes to `main` freely, as `other` does in [Landing](landing.md).

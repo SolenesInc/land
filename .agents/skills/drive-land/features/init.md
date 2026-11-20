@@ -24,6 +24,11 @@ either file.
   does. A file that already holds `` `land guide` `` is left alone.
 - `init-branch` writes `main = "<branch>"` and names that branch in the
   declaration when `origin`'s HEAD is not `main`.
+- `init-hooks` installs the [Push hook](push-hook.md) and the
+  [Trailer hook](trailer-hook.md), and prints
+  `land: hooks      installed pre-push and prepare-commit-msg`, so commits made
+  before the first `land` carry trailers too. It prints nothing for a hook
+  already there.
 - `init-again` changes nothing on a second run, and prints `Nothing changed.`
 
 ## How to get to it
@@ -79,7 +84,8 @@ Preconditions:
   "land init leaves an existing land.toml as it is", "land init proposes the
   gate from what the repository has", "land init names the branch origin lands
   on when it is not main", "land init names a package.json it cannot parse,
-  and writes nothing".
+  and writes nothing", "land init installs the hooks, so a commit before the
+  first land names its session".
 
 ## Gotchas
 

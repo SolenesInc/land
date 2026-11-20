@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, expect, test } from "bun:test"
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -99,7 +99,7 @@ const world = ({ declared = true } = {}) => {
     }
   }
 
-  return { dir, git, tryGit, clone, commit, start, land, landInit, main, holdGate }
+  return { dir, env, git, tryGit, clone, commit, start, land, landInit, main, holdGate }
 }
 
 test("a landing reaches main", async () => {
@@ -406,4 +406,95 @@ test("land init names a package.json it cannot parse, and writes nothing", () =>
   expect(ran.err).toStartWith("land: package.json: SyntaxError:")
   expect(read(join(lander, "land.toml"))).toBeUndefined()
   expect(read(join(lander, "AGENTS.md"))).toBeUndefined()
+})
+
+// A PATH without the attn of the machine running the tests.
+const pathWithoutAttn = (process.env.PATH ?? "")
+  .split(":")
+  .filter((dir) => dir !== "" && !existsSync(join(dir, "attn")))
+  .join(":")
+
+// Commits in an attn session, with the attn the test writes, or none.
+const attnSession = (w: ReturnType<typeof world>, attn: string | undefined) => {
+  const bin = join(w.dir, `attn-${Math.random().toString(36).slice(2)}`)
+  mkdirSync(bin)
+  if (attn !== undefined) writeFileSync(join(bin, "attn"), `#!/bin/sh\n${attn}\n`, { mode: 0o755 })
+  const env = { ...w.env, ATTN_INSIDE_APP: "1", PATH: `${bin}:${pathWithoutAttn}` }
+  return (cwd: string, ...args: string[]) => {
+    const ran = Bun.spawnSync(["git", "commit", "--quiet", ...args], { cwd, env, stdout: "pipe", stderr: "pipe" })
+    if (ran.exitCode !== 0) throw new Error(`git commit: ${ran.stderr}`)
+    return w.git(cwd, "log", "-1", "--format=%(trailers:only)")
+  }
+}
+
+const presentAttn = `case "$2" in
+  --session-id) echo session-1 ;;
+  --seed-ids) printf 's-one\\ns-two\\n' ;;
+  *) exit 2 ;;
+esac`
+
+const hookFiles = (w: ReturnType<typeof world>, clone: string) =>
+  ["pre-push", "prepare-commit-msg"].map((name) =>
+    read(join(w.git(clone, "rev-parse", "--path-format=absolute", "--git-common-dir"), "hooks", name)),
+  )
+
+test("after land, a commit made in an attn session names the session and its seeds", async () => {
+  const w = world()
+  const lander = w.clone("lander")
+  w.commit(lander, "story.txt", "two\n")
+  expect((await w.land(lander)).status).toBe(0)
+  const hooks = hookFiles(w, lander)
+  expect(hooks.every((hook) => hook?.includes("# Installed by land."))).toBe(true)
+
+  const commit = attnSession(w, presentAttn)
+  expect(commit(lander, "--allow-empty", "-m", "In a session")).toBe(
+    "Attn-Session: session-1\nAttn-Seed: s-one\nAttn-Seed: s-two",
+  )
+  expect(commit(lander, "--amend", "--no-edit", "--allow-empty")).toBe(
+    "Attn-Session: session-1\nAttn-Seed: s-one\nAttn-Seed: s-two",
+  )
+
+  w.commit(lander, "story.txt", "three\n")
+  expect((await w.land(lander)).status).toBe(0)
+  expect(hookFiles(w, lander)).toEqual(hooks)
+})
+
+test("a commit gets no attn trailer, and still succeeds, when attn is absent or fails", async () => {
+  const w = world()
+  const lander = w.clone("lander")
+  w.commit(lander, "story.txt", "two\n")
+  expect((await w.land(lander)).status).toBe(0)
+
+  expect(attnSession(w, undefined)(lander, "--allow-empty", "-m", "No attn")).toBe("")
+  expect(attnSession(w, "exit 1")(lander, "--allow-empty", "-m", "A failing attn")).toBe("")
+  expect(w.git(lander, "log", "-1", "--format=%s")).toBe("A failing attn")
+})
+
+test("land init installs the hooks, so a commit before the first land names its session", () => {
+  const w = world()
+  const lander = w.clone("lander")
+
+  const ran = w.landInit(lander)
+
+  expect(ran.out).toContain("land: hooks      installed pre-push and prepare-commit-msg\n")
+  expect(attnSession(w, presentAttn)(lander, "--allow-empty", "-m", "Before the first land")).toBe(
+    "Attn-Session: session-1\nAttn-Seed: s-one\nAttn-Seed: s-two",
+  )
+})
+
+test("land leaves another prepare-commit-msg hook as it is, and says so", async () => {
+  const w = world()
+  const lander = w.clone("lander")
+  const foreign = "#!/bin/sh\nexit 0\n"
+  writeFileSync(join(lander, ".git", "hooks", "prepare-commit-msg"), foreign, { mode: 0o755 })
+  w.commit(lander, "story.txt", "two\n")
+
+  const landed = await w.land(lander)
+
+  expect(landed.status).toBe(0)
+  expect(landed.err).toContain(
+    `/lander/.git/hooks/prepare-commit-msg is not land's hook, so land adds no attn trailers to commits\n`,
+  )
+  expect(hookFiles(w, lander)[1]).toBe(foreign)
+  expect(hookFiles(w, lander)[0]).toContain("# Installed by land.")
 })

@@ -73,9 +73,17 @@ It writes two things, and never overwrites either:
 
 A second `land init` changes nothing.
 
-The first `land` in a clone installs a pre-push hook that refuses a plain
-`git push` to `main`. `land` installs no hook when the clone sets
-`core.hooksPath` or already has a pre-push hook, and says so.
+The first `land` in a clone, or `land init`, installs two hooks in the
+clone's `.git/hooks`, so every worktree has them:
+
+- `pre-push` refuses a plain `git push` to `main`.
+- `prepare-commit-msg` adds `Attn-Session:` and `Attn-Seed:` trailers to a
+  commit made inside an attn session,
+  from `attn presence`. Anywhere else it does nothing, and it never fails a
+  commit.
+
+`land` installs no hook when the clone sets `core.hooksPath`, and leaves a
+hook of the same name that it did not install. It says so on every landing.
 
 ## Develop
 

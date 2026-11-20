@@ -5,6 +5,7 @@ import { Effect } from "effect"
 import { file as declarationFile, readDeclaration } from "./declaration.ts"
 import { LandFailed } from "./failure.ts"
 import { git, gitOk } from "./git.ts"
+import { installHooks } from "./landing.ts"
 
 // A gate land can propose, and where it found it.
 type Proposal = { readonly gate: string; readonly from: string }
@@ -122,12 +123,16 @@ export const init = Effect.gen(function* () {
     written.push(target)
   }
 
+  // Install the hooks now, so commits made before the first land carry attn trailers too.
+  const installed = yield* installHooks(main)
+  if (installed.length > 0) say("hooks", `installed ${installed.join(" and ")}`)
+
   if (decide.length > 0) {
     console.log(`\nDecide:\n${decide.map((line) => `  - ${line}`).join("\n")}`)
   }
   if (written.length > 0) {
     console.log(`\nThen commit ${written.join(" and ")}, and land the commit with land.`)
-  } else if (decide.length === 0) {
+  } else if (decide.length === 0 && installed.length === 0) {
     console.log("\nNothing changed.")
   }
 })
