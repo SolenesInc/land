@@ -75,6 +75,19 @@ When every reader has reported, merge duplicate findings. Try to refute each
 finding against the code. Fix the findings that stand, check the fixes as in
 Check, and commit. Settle the uncertain ones yourself, or ask.
 
+## Note
+
+Write the note for this landing in `.land/note.md`: one sentence for a reader
+of `main` on what changed for them, and a diagram when one helps. `land` adds
+`.land/` to the clone's `.git/info/exclude`, so the note is never committed
+and never stops a landing as an untracked file. To keep the note elsewhere,
+run `land --note <file>` instead of `land`.
+
+`land` pushes the note with `main`, in the landing ref
+`refs/landings/<head>`, and deletes the note file after the push. When `land`
+pushes nothing, the note stays for the next `land`. A note cannot change after
+it lands, as a commit message cannot.
+
 ## Land
 
 ```bash
@@ -97,6 +110,10 @@ land
   `land` again. If the failure is in code you did not touch and it passes on
   `origin/main`, it may be a flake: run `land` again, and name the test in
   your report.
+
+Every landing pushes `main` and the landing ref `refs/landings/<head>` in one
+push, so both move or neither does. The ref's commit holds `landing.json`,
+what `land` knew at the push, and the note when there is one.
 
 When `main` moves while the gate runs, `land` rebases and pushes without
 running the gate again, and prints

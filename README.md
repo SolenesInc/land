@@ -6,9 +6,21 @@ pushes:
 
 ```text
 $ land
+land: note   .land/note.md
 land: gate   bun run check   ok in 1m 49s
 land: push   main is at 41d07be
 ```
+
+Each landing pushes `main` and a landing ref, `refs/landings/<head>`, in one
+atomic push. The ref names a commit, with no parent, that holds
+`landing.json`, what `land` knew at the push (its version, the base, the head,
+the gate's command, how long it took and the commit it ran on), and the
+note, when the lander wrote one. The note is markdown for the readers of
+`main`, written in `.land/note.md` or in the file `land --note <file>` names.
+`land` adds `.land/` to the clone's `.git/info/exclude`, and deletes the note
+file after the push. A normal clone does not fetch landing refs; read one with
+`git fetch origin refs/landings/<head>` or GitHub's
+`GET /repos/{owner}/{repo}/git/ref/landings/<head>`.
 
 `land` refuses to start while the worktree has uncommitted changes or untracked
 files that git does not ignore, because the gate runs in the worktree and must
@@ -19,7 +31,7 @@ without running the gate again, and names the commit the gate ran on. Lands
 from several worktrees of one clone can run at once.
 
 `land guide` prints the procedure around a landing: branch, commit, check,
-review, land and report. `land guide review` and `land guide sheriff` print the
+review, note, land and report. `land guide review` and `land guide sheriff` print the
 procedures that keep `main` healthy after a landing; see
 [Keep main healthy](#keep-main-healthy).
 

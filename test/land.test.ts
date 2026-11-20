@@ -66,8 +66,13 @@ const world = ({ declared = true } = {}) => {
     return git(cwd, "rev-parse", "HEAD")
   }
 
-  const start = (cwd: string, gate: string, extra: Record<string, string> = {}) => {
-    const child = Bun.spawn([bin], { cwd, env: { ...env, TEST_GATE: gate, ...extra }, stdout: "pipe", stderr: "pipe" })
+  const start = (cwd: string, gate: string, extra: Record<string, string> = {}, args: string[] = []) => {
+    const child = Bun.spawn([bin, ...args], {
+      cwd,
+      env: { ...env, TEST_GATE: gate, ...extra },
+      stdout: "pipe",
+      stderr: "pipe",
+    })
     const result = (async (): Promise<Result> => {
       const [out, err, status] = await Promise.all([
         new Response(child.stdout).text(),
@@ -86,6 +91,18 @@ const world = ({ declared = true } = {}) => {
 
   const main = () => git(origin, "rev-parse", "main")
 
+  // The landing refs on origin, and what the commit of one holds.
+  const landingRefs = () =>
+    git(origin, "for-each-ref", "--format=%(refname)", "refs/landings/").split("\n").filter(Boolean)
+  const landing = (head: string) => {
+    const ref = `refs/landings/${head}`
+    return {
+      files: git(origin, "ls-tree", "--name-only", ref).split("\n"),
+      record: JSON.parse(git(origin, "show", `${ref}:landing.json`)),
+      note: tryGit(origin, "show", `${ref}:note.md`).out,
+    }
+  }
+
   // A gate that says it started, then waits to be released, so a test can act while
   // a landing sits inside its gate. Both ends are FIFOs, so nothing sleeps.
   const holdGate = (name: string) => {
@@ -99,7 +116,7 @@ const world = ({ declared = true } = {}) => {
     }
   }
 
-  return { dir, env, git, tryGit, clone, commit, start, land, landInit, main, holdGate }
+  return { dir, env, git, tryGit, clone, commit, start, land, landInit, main, landingRefs, landing, holdGate }
 }
 
 test("a landing reaches main", async () => {
@@ -200,7 +217,11 @@ test("main moving after the gate still lands, and land names the commit the gate
     `land: main moved after the gate ran on ${checked.slice(0, 7)}; pushing without running it again`,
   )
   expect(w.git(lander, "rev-parse", "HEAD~1")).toBe(theirs)
-  expect(w.main()).toBe(w.git(lander, "rev-parse", "HEAD"))
+  const head = w.git(lander, "rev-parse", "HEAD")
+  expect(w.main()).toBe(head)
+  // The landing ref names the head that reached main, and none names the head the gate ran on.
+  expect(w.landingRefs()).toEqual([`refs/landings/${head}`])
+  expect(w.landing(head).record).toMatchObject({ base: theirs, head, gate: { ranOn: checked } })
 })
 
 test("two lands from two worktrees of one clone both land", async () => {
@@ -224,6 +245,9 @@ test("two lands from two worktrees of one clone both land", async () => {
   expect(other.status).toBe(0)
   const landed = w.git(lander, "log", "--format=%s", "-2", w.main())
   expect(landed.split("\n").sort()).toEqual(["Change one.txt", "Change two.txt"])
+  // The land whose push lost rebased and pushed again: only the heads on main have landing refs.
+  const heads = w.git(lander, "rev-list", "-2", w.main()).split("\n")
+  expect(w.landingRefs().sort()).toEqual(heads.map((head) => `refs/landings/${head}`).sort())
 })
 
 test("a land that is killed mid-landing does not stop the next land", async () => {
@@ -242,6 +266,124 @@ test("a land that is killed mid-landing does not stop the next land", async () =
   const landed = await w.land(lander)
   expect(landed.status).toBe(0)
   expect(w.main()).toBe(head)
+})
+
+test("a landing with a note pushes main and its landing ref in one push, then deletes the note", async () => {
+  const w = world()
+  const lander = w.clone("lander")
+  const base = w.main()
+  const head = w.commit(lander, "story.txt", "two\n")
+  mkdirSync(join(lander, ".land"))
+  writeFileSync(join(lander, ".land", "note.md"), "The story has a second line.\n")
+
+  // The gate sees the note, and the untracked-file check does not.
+  const landed = await w.land(lander, "test -f .land/note.md")
+
+  expect(landed).toMatchObject({ status: 0, err: "" })
+  expect(landed.out).toContain("land: note   .land/note.md\n")
+  expect(w.main()).toBe(head)
+  expect(w.landingRefs()).toEqual([`refs/landings/${head}`])
+  const pushed = w.landing(head)
+  expect(pushed.files).toEqual(["landing.json", "note.md"])
+  expect(pushed.note).toBe("The story has a second line.\n")
+  expect(pushed.record).toEqual({
+    version: 1,
+    land: (await Bun.file(join(root, "package.json")).json()).version,
+    base,
+    head,
+    gate: { command: 'eval "$TEST_GATE"', seconds: expect.any(Number), ranOn: head },
+    recordings: [],
+  })
+  expect(existsSync(join(lander, ".land", "note.md"))).toBe(false)
+  // A normal fetch does not bring the landing refs.
+  w.git(lander, "fetch", "--quiet")
+  expect(w.git(lander, "for-each-ref", "refs/landings/")).toBe("")
+})
+
+test("a landing without a note pushes a landing ref that holds landing.json alone", async () => {
+  const w = world()
+  const lander = w.clone("lander")
+  const head = w.commit(lander, "story.txt", "two\n")
+
+  expect((await w.land(lander)).status).toBe(0)
+
+  expect(w.landing(head).files).toEqual(["landing.json"])
+})
+
+test("land --note lands the note in the file it names", async () => {
+  const w = world()
+  const lander = w.clone("lander")
+  const head = w.commit(lander, "story.txt", "two\n")
+  const elsewhere = join(w.dir, "written-elsewhere.md")
+  writeFileSync(elsewhere, "Named on the command line.\n")
+
+  const landed = await w.start(lander, "true", {}, ["--note", elsewhere]).result
+
+  expect(landed).toMatchObject({ status: 0, err: "" })
+  expect(landed.out).toContain(`land: note   ${elsewhere}\n`)
+  expect(w.landing(head).note).toBe("Named on the command line.\n")
+  expect(existsSync(elsewhere)).toBe(false)
+})
+
+test("land --note with no such file pushes nothing", async () => {
+  const w = world()
+  const lander = w.clone("lander")
+  const before = w.main()
+  w.commit(lander, "story.txt", "two\n")
+
+  const landed = await w.start(lander, "true", {}, ["--note", "missing.md"]).result
+
+  expect(landed).toEqual({ status: 1, out: "", err: "land: --note missing.md: no such file\n" })
+  expect(w.main()).toBe(before)
+})
+
+test("a note that git tracks is refused, because land would delete it", async () => {
+  const w = world()
+  const lander = w.clone("lander")
+  const before = w.main()
+  w.commit(lander, "CHANGES.md", "Tracked.\n")
+
+  const landed = await w.start(lander, "true", {}, ["--note", "CHANGES.md"]).result
+
+  expect(landed.status).toBe(1)
+  expect(landed.err).toBe(
+    "land: the note CHANGES.md is committed, and land deletes the note after the push; write it in a file git does not track\n",
+  )
+  expect(read(join(lander, "CHANGES.md"))).toBe("Tracked.\n")
+  expect(w.main()).toBe(before)
+})
+
+test("a failing gate keeps the note and pushes no landing ref", async () => {
+  const w = world()
+  const lander = w.clone("lander")
+  w.commit(lander, "story.txt", "two\n")
+  mkdirSync(join(lander, ".land"))
+  writeFileSync(join(lander, ".land", "note.md"), "Kept.\n")
+
+  expect((await w.land(lander, "exit 3")).status).toBe(3)
+
+  expect(read(join(lander, ".land", "note.md"))).toBe("Kept.\n")
+  expect(w.landingRefs()).toEqual([])
+})
+
+test("land adds .land/ to the clone's exclude once, for every worktree", async () => {
+  const w = world()
+  const lander = w.clone("lander")
+  const exclude = join(lander, ".git", "info", "exclude")
+  writeFileSync(exclude, "# written on Windows\r\n# no trailing newline")
+  w.commit(lander, "story.txt", "two\n")
+  expect((await w.land(lander)).status).toBe(0)
+  expect((await w.land(lander)).out).toBe("land: nothing to land\n")
+
+  const second = join(w.dir, "second")
+  w.git(lander, "worktree", "add", "--quiet", "-b", "second", second, "origin/main")
+  const head = w.commit(second, "other.txt", "other\n")
+  mkdirSync(join(second, ".land"))
+  writeFileSync(join(second, ".land", "note.md"), "From the second worktree.\n")
+  expect((await w.land(second)).status).toBe(0)
+
+  expect(read(exclude)).toBe("# written on Windows\r\n# no trailing newline\n.land/\n")
+  expect(w.landing(head).note).toBe("From the second worktree.\n")
 })
 
 test("an untracked file that the gate depends on stops the landing", async () => {

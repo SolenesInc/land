@@ -1,7 +1,7 @@
 # Guide and help
 
 `land guide` prints the procedure around a landing: branch, commit, check,
-review, land, report and what to do after the push. `land guide review` and
+review, note, land, report and what to do after the push. `land guide review` and
 `land guide sheriff` print the procedures that keep `main` healthy after a
 landing: review what landed, and get a red `main` green. Any runner follows
 them, so they name no attn command. A repository's guidance needs two lines
@@ -50,8 +50,8 @@ Preconditions:
 - A fresh run, `r`.
 
 - **The guide.** Run `drive.ts r do home 'land guide'`. It starts with
-  `# Land on main` and has the sections Branch, Commit, Check, Review, Land,
-  Report and After the push. It exits 0.
+  `# Land on main` and has the sections Branch, Commit, Check, Review, Note,
+  Land, Report and After the push. It exits 0.
 - **The review and sheriff procedures.** Run
   `drive.ts r do home 'land guide review'` and
   `drive.ts r do home 'land guide sheriff'`. They start with `# Review main`
@@ -60,9 +60,10 @@ Preconditions:
   The `Attn-Seed:` and `Attn-Session:` trailer names are expected.
 - **Version and help.** Run `drive.ts r do home 'land --version'`: it prints
   `land <version>`, the version in `package.json`. Run
-  `drive.ts r do home 'land --help'`: it lists `land`, `land init`,
-  `land guide`, `land guide review`, `land guide sheriff`, `land record`,
-  `land --help`, `land --version`, and the keys `gate`, `main` and `record`.
+  `drive.ts r do home 'land --help'`: it lists `land`, `land --note <file>`,
+  `land init`, `land guide`, `land guide review`, `land guide sheriff`,
+  `land record`, `land --help`, `land --version`, and the keys `gate`, `main`
+  and `record`.
 - **Unknown arguments.** Run `drive.ts r do home 'land nonsense'`. It prints
   `land: unknown arguments: nonsense` and the help, and exits 2.
 - **Proof.** The saved guides, the grep, and the saved output of the three

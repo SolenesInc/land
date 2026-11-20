@@ -3,9 +3,10 @@ import { LandFailed } from "./failure.ts"
 
 type Ran = { readonly status: number; readonly out: string; readonly err: string }
 
-export const run = (argv: ReadonlyArray<string>, env?: Record<string, string>) =>
+export const run = (argv: ReadonlyArray<string>, env?: Record<string, string>, input?: string) =>
   Effect.promise(async (): Promise<Ran> => {
     const child = Bun.spawn([...argv], {
+      stdin: input === undefined ? "ignore" : new Blob([input]),
       stdout: "pipe",
       stderr: "pipe",
       env: env === undefined ? process.env : { ...process.env, ...env },
@@ -20,11 +21,15 @@ export const run = (argv: ReadonlyArray<string>, env?: Record<string, string>) =
 
 export const git = (...args: ReadonlyArray<string>) => run(["git", ...args])
 
-export const gitOk = (...args: ReadonlyArray<string>) =>
-  git(...args).pipe(
-    Effect.flatMap(({ status, out, err }) =>
-      status === 0 ? Effect.succeed(out) : Effect.fail(new LandFailed({ message: `git ${args.join(" ")}: ${err}` })),
-    ),
+const outOrFail = (args: ReadonlyArray<string>) =>
+  Effect.flatMap(({ status, out, err }: Ran) =>
+    status === 0 ? Effect.succeed(out) : Effect.fail(new LandFailed({ message: `git ${args.join(" ")}: ${err}` })),
   )
+
+export const gitOk = (...args: ReadonlyArray<string>) => git(...args).pipe(outOrFail(args))
+
+// gitOk, with input on git's stdin.
+export const gitWith = (input: string, ...args: ReadonlyArray<string>) =>
+  run(["git", ...args], undefined, input).pipe(outOrFail(args))
 
 export const succeeds = (...args: ReadonlyArray<string>) => git(...args).pipe(Effect.map(({ status }) => status === 0))

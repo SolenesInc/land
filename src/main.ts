@@ -9,10 +9,12 @@ import { record } from "./record.ts"
 import { version } from "../package.json"
 
 const help = `land lands finished commits on main: it rebases onto origin/main, runs the
-gate that land.toml names, and pushes.
+gate that land.toml names, and pushes main with the landing ref, refs/landings/<head>.
 
 Usage:
-  land                 land the commits of the current branch
+  land                 land the commits of the current branch, with the note in
+                       .land/note.md when there is one
+  land --note <file>   land them with the note in <file>
   land init            adopt land in this repository: write land.toml and the trunk declaration
   land record [args]   run the record command, and print a markdown line for each recording it made
   land guide           print the procedure for landing a change
@@ -20,6 +22,9 @@ Usage:
   land guide sheriff   print the procedure for getting main's CI green
   land --help          print this help
   land --version       print land's version
+
+The note is markdown for the readers of main. The landing ref's commit holds it,
+beside landing.json, and land deletes the note file after the push.
 
 land.toml, at the repository root:
   gate = "bun run check"   a shell command; land pushes only when it exits 0
@@ -43,9 +48,10 @@ const report = async (command: Effect.Effect<void, LandFailed>) => {
 
 const main = async (args: ReadonlyArray<string>) => {
   if (args[0] === "record") return report(record(args.slice(1)))
+  if (args.length === 2 && args[0] === "--note") return report(land({ note: args[1] }))
   switch (args.join(" ")) {
     case "":
-      return report(land)
+      return report(land({}))
     case "init":
       return report(init)
     case "guide":

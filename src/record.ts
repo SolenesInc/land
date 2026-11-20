@@ -13,7 +13,7 @@ const land = ".land"
 export const excludeLandDir = Effect.gen(function* () {
   const path = yield* gitOk("rev-parse", "--path-format=absolute", "--git-path", "info/exclude")
   const text = yield* Effect.promise(() => readFile(path, "utf8").catch(() => ""))
-  if (text.split("\n").includes(`${land}/`)) return
+  if (text.split(/\r?\n/).includes(`${land}/`)) return
   yield* Effect.promise(async () => {
     await mkdir(dirname(path), { recursive: true })
     await appendFile(path, `${text === "" || text.endsWith("\n") ? "" : "\n"}${land}/\n`)

@@ -4,7 +4,11 @@ import { constants } from "node:os"
 import { Effect } from "effect"
 import { readDeclaration } from "./declaration.ts"
 import { LandFailed } from "./failure.ts"
-import { git, gitOk, run, succeeds } from "./git.ts"
+import { git, gitOk, gitWith, run, succeeds } from "./git.ts"
+import { deleteNote, findNote, type Note } from "./note.ts"
+import { excludeLandDir } from "./record.ts"
+import type { LandingRecord } from "./schema.ts"
+import { version } from "../package.json"
 
 const maxAttempts = 5
 
@@ -184,7 +188,11 @@ const runGate = (gate: string, root: string, base: string, head: string) =>
       await child.exited
       return { status: child.exitCode, signal: child.signalCode }
     })
-    if (status === 0) return yield* say(`gate   ${gate}   ok in ${duration(Date.now() - started)}`)
+    if (status === 0) {
+      const ms = Date.now() - started
+      yield* say(`gate   ${gate}   ok in ${duration(ms)}`)
+      return ms / 1000
+    }
     const exit = status ?? 128 + (typeof signal === "string" ? constants.signals[signal] : (signal ?? 0))
     return yield* new LandFailed({
       message: `gate   ${gate}   failed with status ${exit}; nothing was pushed`,
@@ -192,61 +200,99 @@ const runGate = (gate: string, root: string, base: string, head: string) =>
     })
   })
 
-export const land = Effect.gen(function* () {
-  const root = yield* gitOk("rev-parse", "--show-toplevel")
-  const declaration = yield* readDeclaration(root)
-  const main = declaration.main ?? "main"
+// The commit refs/landings/<head> names: landing.json and, when the lander wrote one, note.md.
+// It has no parent, so it shares no history with main and a clone never fetches it.
+const landingCommit = (record: LandingRecord, note: Note | undefined) =>
+  Effect.gen(function* () {
+    const files = [{ name: "landing.json", text: `${JSON.stringify(record, null, 2)}\n` }]
+    if (note !== undefined) files.push({ name: "note.md", text: note.text })
+    const entries: string[] = []
+    for (const file of files) {
+      const blob = yield* gitWith(file.text, "hash-object", "-w", "--stdin")
+      entries.push(`100644 blob ${blob}\t${file.name}\n`)
+    }
+    const tree = yield* gitWith(entries.join(""), "mktree")
+    return yield* gitOk("commit-tree", tree, "-m", `Landing ${record.head}`)
+  })
 
-  if (yield* rebasing) {
-    return yield* new LandFailed({ message: "a rebase is in progress; finish it, or abort it with git rebase --abort" })
-  }
-  if (!(yield* succeeds("diff", "--quiet")) || !(yield* succeeds("diff", "--cached", "--quiet"))) {
-    return yield* new LandFailed({ message: "commit or stash your changes first" })
-  }
-  // The gate runs in the worktree, so a file the landing does not contain could pass it.
-  const untracked = yield* gitOk("ls-files", "--others", "--exclude-standard", "--full-name", ":/")
-  if (untracked !== "") {
-    return yield* new LandFailed({
-      message: `the worktree has files the landing does not contain, so the gate could pass because of them:
+export const land = (options: { readonly note?: string }) =>
+  Effect.gen(function* () {
+    const root = yield* gitOk("rev-parse", "--show-toplevel")
+    const declaration = yield* readDeclaration(root)
+    const main = declaration.main ?? "main"
+    yield* excludeLandDir
+    const note = yield* findNote(root, options.note)
+
+    if (yield* rebasing) {
+      return yield* new LandFailed({
+        message: "a rebase is in progress; finish it, or abort it with git rebase --abort",
+      })
+    }
+    if (!(yield* succeeds("diff", "--quiet")) || !(yield* succeeds("diff", "--cached", "--quiet"))) {
+      return yield* new LandFailed({ message: "commit or stash your changes first" })
+    }
+    // The gate runs in the worktree, so a file the landing does not contain could pass it.
+    const untracked = yield* gitOk("ls-files", "--others", "--exclude-standard", "--full-name", ":/")
+    if (untracked !== "") {
+      return yield* new LandFailed({
+        message: `the worktree has files the landing does not contain, so the gate could pass because of them:
 ${untracked
   .split("\n")
   .map((file) => `  ${file}`)
   .join("\n")}
 Commit, remove or ignore them, then run land again.`,
-    })
-  }
+      })
+    }
 
-  yield* fetchMain(main)
-  yield* refuseCommitsByAnotherAuthor(main)
-  yield* rebaseOntoMain(main)
-  if ((yield* gitOk("rev-list", "--count", `${landRef(main)}..HEAD`)) === "0") return yield* say("nothing to land")
-  yield* installHooks(main)
-
-  const checked = yield* short("HEAD")
-  if (declaration.gate !== undefined) {
-    yield* runGate(declaration.gate, root, yield* gitOk("rev-parse", landRef(main)), yield* gitOk("rev-parse", "HEAD"))
-  }
-
-  const url = yield* gitOk("remote", "get-url", "--push", "origin")
-  let told = false
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     yield* fetchMain(main)
+    yield* refuseCommitsByAnotherAuthor(main)
     yield* rebaseOntoMain(main)
-    if (!told && declaration.gate !== undefined && (yield* short("HEAD")) !== checked) {
-      told = true
-      yield* warn(`${main} moved after the gate ran on ${checked}; pushing without running it again`)
+    if ((yield* gitOk("rev-list", "--count", `${landRef(main)}..HEAD`)) === "0") return yield* say("nothing to land")
+    yield* installHooks(main)
+
+    if (note !== undefined) yield* say(`note   ${note.shown}`)
+    const checked = yield* gitOk("rev-parse", "HEAD")
+    let gate: LandingRecord["gate"]
+    if (declaration.gate !== undefined) {
+      const seconds = yield* runGate(declaration.gate, root, yield* gitOk("rev-parse", landRef(main)), checked)
+      gate = { command: declaration.gate, seconds, ranOn: checked }
     }
-    // Push to the URL, not to the remote's name, so git writes no tracking ref that
-    // another land of the clone may be writing. advanceTracking moves it forward.
-    const pushed = yield* run(["git", "push", "--quiet", url, `HEAD:refs/heads/${main}`], { LAND_LANDING: "1" })
-    if (pushed.status === 0) {
-      yield* advanceTracking(main, yield* gitOk("rev-parse", "HEAD"))
-      return yield* say(`push   ${main} is at ${yield* short("HEAD")}`)
+
+    const url = yield* gitOk("remote", "get-url", "--push", "origin")
+    let told = false
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      yield* fetchMain(main)
+      yield* rebaseOntoMain(main)
+      const head = yield* gitOk("rev-parse", "HEAD")
+      if (!told && declaration.gate !== undefined && head !== checked) {
+        told = true
+        yield* warn(`${main} moved after the gate ran on ${yield* short(checked)}; pushing without running it again`)
+      }
+      const record: LandingRecord = {
+        version: 1,
+        land: version,
+        base: yield* gitOk("rev-parse", landRef(main)),
+        head,
+        ...(gate === undefined ? {} : { gate }),
+        recordings: [],
+      }
+      const landing = yield* landingCommit(record, note)
+      // One atomic push, so a landing ref never names a head that is not on main.
+      // Push to the URL, not to the remote's name, so git writes no tracking ref that
+      // another land of the clone may be writing. advanceTracking moves it forward.
+      const pushed = yield* run(
+        ["git", "push", "--quiet", "--atomic", url, `${head}:refs/heads/${main}`, `${landing}:refs/landings/${head}`],
+        { LAND_LANDING: "1" },
+      )
+      if (pushed.status === 0) {
+        yield* advanceTracking(main, head)
+        if (note !== undefined) yield* deleteNote(note)
+        return yield* say(`push   ${main} is at ${yield* short(head)}`)
+      }
+      const fetched = yield* fetchMain(main)
+      if (yield* succeeds("merge-base", "--is-ancestor", fetched, "HEAD")) {
+        return yield* new LandFailed({ message: `git push failed, and not because ${main} moved:\n${pushed.err}` })
+      }
     }
-    const fetched = yield* fetchMain(main)
-    if (yield* succeeds("merge-base", "--is-ancestor", fetched, "HEAD")) {
-      return yield* new LandFailed({ message: `git push failed, and not because ${main} moved:\n${pushed.err}` })
-    }
-  }
-  return yield* new LandFailed({ message: `${main} moved ${maxAttempts} times while landing; run land again` })
-})
+    return yield* new LandFailed({ message: `${main} moved ${maxAttempts} times while landing; run land again` })
+  })
