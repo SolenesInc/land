@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "land": "0.8.0",
+  "base": "5a2f59260e50bd48ff48f7692d955cfee591ffab",
+  "head": "1f56efcbaec11fc9264ed928b210a298109f2b5b",
+  "gate": {
+    "command": "bun run check",
+    "seconds": 45.168,
+    "ranOn": "1f56efcbaec11fc9264ed928b210a298109f2b5b"
+  },
+  "recordings": [
+    {
+      "sha256": "f812fd7657e3017d17e79ff53b2375a770fb53f671ce69ecdb3dbaf862584ca0",
+      "ext": "mp4",
+      "bytes": 37648
+    }
+  ]
+}
