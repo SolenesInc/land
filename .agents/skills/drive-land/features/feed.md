@@ -53,7 +53,9 @@ the outbox: <why>`. It needs the `feed` key and a GitHub origin. A bad
 ### Agents
 
 - The same commands. `land guide`'s Note step says to record a visible change
-  and link it in the note. Review and sheriff runners call `land event`.
+  and link it in the note. `land guide review` says to post each routed finding with
+  `land event --kind finding`, and `land guide sheriff` each landed repair with
+  `land event --kind repair --repairs <culprit>`, when `land.toml` has `feed`.
 
 ### Triggers
 

@@ -56,7 +56,10 @@ Preconditions:
   `drive.ts r do home 'land guide review'` and
   `drive.ts r do home 'land guide sheriff'`. They start with `# Review main`
   and `# Sheriff`, name `.agents/land/review.md` and `.agents/land/sheriff.md`,
-  and exit 0. Run `grep -nw attn` on each saved output: it prints nothing.
+  and exit 0. The review procedure has the section "Post each finding to the
+  feed" with `land event <sha> --kind finding`; the sheriff procedure has
+  `land event <repair sha> --kind repair` with `--repairs`. Run
+  `grep -nw attn` on each saved output: it prints nothing.
   The `Attn-Seed:` and `Attn-Session:` trailer names are expected.
 - **Version and help.** Run `drive.ts r do home 'land --version'`: it prints
   `land <version>`, the version in `package.json`. Run
