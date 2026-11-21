@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "land": "0.8.0",
+  "base": "6f8a44aa4d2f85f5998a4ce2b04bc16ec8e1fdcd",
+  "head": "f32bf1696c518418abbc7f61657e305effd68edc",
+  "gate": {
+    "command": "bun run check",
+    "seconds": 27.006,
+    "ranOn": "f32bf1696c518418abbc7f61657e305effd68edc"
+  },
+  "recordings": []
+}
