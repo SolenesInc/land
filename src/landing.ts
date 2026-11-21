@@ -261,7 +261,7 @@ Commit, remove or ignore them, then run land again.`,
     yield* installHooks(main)
 
     if (note !== undefined) {
-      const count = listed(media!.recordings).length
+      const count = media!.recordings.length
       yield* say(`note   ${note.shown}${count === 0 ? "" : `, ${plural(count)}`}`)
     }
     const checked = yield* gitOk("rev-parse", "HEAD")
@@ -300,7 +300,7 @@ Commit, remove or ignore them, then run land again.`,
       if (pushed.status === 0) {
         yield* advanceTracking(main, head)
         yield* say(`push   ${main} is at ${yield* short(head)}`)
-        if (media?.at !== undefined) yield* uploadRecordings(declaration.feed!, media.at, head, media.recordings)
+        if (media?.at !== undefined) yield* uploadRecordings(root, declaration.feed!, media.at, head, media.recordings)
         if (note !== undefined) yield* deleteNote(note)
         if (declaration.feed !== undefined) {
           const at = media?.at ?? (yield* githubRepository)

@@ -31,19 +31,30 @@ const trim = (feed: string) => feed.replace(/\/+$/, "")
 const callTimeout = 30_000
 const putTimeout = 600_000
 
-// Why a request did not do its job, in words for the lander.
-const reason = (error: unknown, ms: number) => {
-  if (error instanceof DOMException && error.name === "TimeoutError") return `no answer in ${ms / 1000}s`
-  return "the feed did not answer"
-}
+// Why a request did not do its job, in words for the lander. A feed that is unreachable gets no
+// more requests this run, so a hanging feed costs one timeout. One that refuses, 404, does not
+// list the file or the event, and asking again will not change that.
+export type Failure = { readonly why: string; readonly kind: "unreachable" | "refused" | "failed" }
+
+const unreachable = (error: unknown, ms: number): Failure => ({
+  kind: "unreachable",
+  why:
+    error instanceof DOMException && error.name === "TimeoutError"
+      ? `no answer in ${ms / 1000}s`
+      : "the feed did not answer",
+})
 
 const call = (url: string, init: RequestInit, ms = callTimeout) =>
   Effect.tryPromise({
     try: () => fetch(url, { ...init, signal: AbortSignal.timeout(ms) }),
-    catch: (error) => reason(error, ms),
+    catch: (error) => unreachable(error, ms),
   })
 
-const answered = (response: Response, who: string) => `${who} answered ${response.status}`
+const answered = (response: Response, who: string): Failure => ({
+  kind: response.status === 404 ? "refused" : "failed",
+  why: `${who} answered ${response.status}`,
+})
+const failed = (why: string): Failure => ({ kind: "failed", why })
 
 export type Upload = {
   readonly feed: string
@@ -62,18 +73,18 @@ export const upload = (u: Upload) =>
     if (!asked.ok) return yield* Effect.fail(answered(asked, "the feed"))
     const answer = (yield* Effect.tryPromise({
       try: () => asked.json(),
-      catch: () => "the feed answered with no JSON",
-    })) as { put?: { url: string; headers: Record<string, string> }; present?: boolean; removed?: boolean }
-    if (answer.removed) return "removed" as const
-    if (answer.present) return "present" as const
-    if (answer.put === undefined) return yield* Effect.fail("the feed answered with no PUT")
+      catch: () => failed("the feed answered with no JSON"),
+    })) as { put?: { url: string; headers: Record<string, string> }; present?: boolean; removed?: boolean } | null
+    if (answer?.removed === true) return "removed" as const
+    if (answer?.present === true) return "present" as const
+    if (typeof answer?.put?.url !== "string") return yield* Effect.fail(failed("the feed answered with no PUT"))
 
     const put = yield* call(
       answer.put.url,
       { method: "PUT", headers: answer.put.headers, body: Bun.file(u.path) },
       putTimeout,
     )
-    if (!put.ok) return yield* Effect.fail(answered(put, "the storage"))
+    if (!put.ok) return yield* Effect.fail(failed(`the storage answered ${put.status}`))
     const told = yield* call(`${api}/uploaded`, { method: "POST" })
     if (told.status === 410) return "removed" as const
     if (!told.ok) return yield* Effect.fail(answered(told, "the feed"))

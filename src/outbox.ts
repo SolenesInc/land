@@ -2,7 +2,7 @@ import { copyFile, mkdir, readdir, readFile, rename, rm, writeFile } from "node:
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { Effect } from "effect"
-import { notify, upload, type Repository } from "./feed.ts"
+import { notify, upload, type Failure, type Repository } from "./feed.ts"
 
 // D24: what land could not send the feed, kept on the lander's machine until a later land
 // sends it. An entry holds no credential; the ref on GitHub authorizes it.
@@ -34,16 +34,20 @@ const name = (entry: Entry) =>
     : `event~${entry.at.owner}~${entry.at.repo}~${entry.id}`
 
 // The entry's JSON is written last, by rename, so a drain never finds an entry without its bytes.
+// Fails with why the entry could not be kept, such as a full disk.
 const put = (entry: Entry, bytes?: string) =>
-  Effect.promise(async () => {
-    const base = join(dir(), name(entry))
-    await mkdir(dir(), { recursive: true })
-    if (bytes !== undefined) {
-      await copyFile(bytes, `${base}.bytes.tmp`)
-      await rename(`${base}.bytes.tmp`, `${base}.bytes`)
-    }
-    await writeFile(`${base}.json.tmp`, `${JSON.stringify(entry)}\n`)
-    await rename(`${base}.json.tmp`, `${base}.json`)
+  Effect.tryPromise({
+    try: async () => {
+      const base = join(dir(), name(entry))
+      await mkdir(dir(), { recursive: true })
+      if (bytes !== undefined) {
+        await copyFile(bytes, `${base}.bytes.tmp`)
+        await rename(`${base}.bytes.tmp`, `${base}.bytes`)
+      }
+      await writeFile(`${base}.json.tmp`, `${JSON.stringify(entry)}\n`)
+      await rename(`${base}.json.tmp`, `${base}.json`)
+    },
+    catch: (error) => `the outbox could not keep it: ${String(error)}`,
   })
 
 export const keepRecording = (entry: Omit<Recording, "kind">, path: string) =>
@@ -53,12 +57,19 @@ export const keepEvent = (entry: Omit<Event, "kind">) => put({ kind: "event", ..
 const send = (entry: Entry, base: string) =>
   entry.kind === "recording" ? Effect.asVoid(upload({ ...entry, path: `${base}.bytes` })) : notify(entry)
 
-// Send every entry, best effort. Returns how many went and how many still wait, with why the
-// first of those did not go.
+const what = (entry: Entry) =>
+  entry.kind === "recording"
+    ? `the recording ${entry.sha256.slice(0, 12)} of ${entry.at.owner}/${entry.at.repo}`
+    : `the event ${entry.id.slice(0, 12)} of ${entry.at.owner}/${entry.at.repo}`
+
+// Send every entry, best effort. An entry the feed refuses is dropped, with why, since asking
+// again changes nothing. Returns how many went and how many still wait, with why the first of
+// those did not go.
 export const drain = Effect.gen(function* () {
   const names = yield* Effect.promise(() => readdir(dir()).catch(() => [] as string[]))
   let sent = 0
   const waiting: string[] = []
+  const down = new Map<string, string>() // feeds that did not answer this run, and why
   for (const file of names.filter((n) => n.endsWith(".json")).sort()) {
     const base = join(dir(), file.slice(0, -".json".length))
     const entry = yield* Effect.promise(() =>
@@ -68,18 +79,25 @@ export const drain = Effect.gen(function* () {
       ),
     )
     if (entry === undefined) continue // another land sent it first
-    const why = yield* send(entry, base).pipe(
-      Effect.as(undefined),
-      Effect.catch((error: string) => Effect.succeed(error)),
-    )
-    if (why !== undefined) {
-      waiting.push(why)
+    const skipped = down.get(entry.feed)
+    if (skipped !== undefined) {
+      waiting.push(skipped)
       continue
     }
+    const failure = yield* send(entry, base).pipe(
+      Effect.as(undefined),
+      Effect.catch((failure: Failure) => Effect.succeed(failure)),
+    )
+    if (failure?.kind === "unreachable") down.set(entry.feed, failure.why)
+    if (failure !== undefined && failure.kind !== "refused") {
+      waiting.push(failure.why)
+      continue
+    }
+    if (failure?.kind === "refused") console.log(`land: outbox dropped ${what(entry)}: ${failure.why}`)
+    else sent++
     yield* Effect.promise(() =>
       Promise.all([rm(`${base}.json`, { force: true }), rm(`${base}.bytes`, { force: true })]),
     )
-    sent++
   }
   return { sent, waiting: waiting.length, why: waiting[0] }
 })

@@ -11,13 +11,13 @@ lander's machine, and the next `land` sends it.
 
 - `feed-recording` finds the note's links to local media files (`png`, `jpg`,
   `jpeg`, `gif`, `webp`, `mp4`, `webm`), relative to the repository root as
-  `land record` prints them. It prints
+  `land record` prints them, outside code spans and fenced blocks. It prints
   `land: note   .land/note.md, 1 recording`, rewrites each link to
   `<feed>/m/<owner>/<repo>/<sha256>.<ext>`, and lists each file once in
   `landing.json`'s `recordings` (`sha256`, `ext`, `bytes`).
 - `feed-upload` uploads each recording after the push, sending no credential,
-  prints `land: media  1 recording uploaded`, deletes the uploaded files with
-  the note, and prints `land: feed   <feed>/<owner>/<repo>/<short head>`.
+  prints `land: media  1 recording uploaded`, deletes the uploaded files that
+  are in `.land/` with the note (a tracked or outside file stays), and prints `land: feed   <feed>/<owner>/<repo>/<short head>`.
 - `feed-refuse` stops before the gate, with nothing pushed and the note kept,
   for a link to a missing file, a recording over 200 MB, a local recording with
   no `feed` key, and a local recording when origin is not on GitHub.
@@ -25,9 +25,15 @@ lander's machine, and the next `land` sends it.
   `land: media  <link> waits in the outbox: <why>`; the file stays in
   `.land/media/`. The outbox is `$XDG_STATE_HOME/land/outbox`, or
   `~/.local/state/land/outbox`.
+- `feed-refused` drops a recording or an event notice the feed answers 404
+  for, as it does for a repository without the App, and says
+  `is not uploaded: the feed answered 404; is the Attn Land App installed on <owner>/<repo>?`.
+  A drain prints `land: outbox dropped <what>: <why>` for such an entry.
 - `feed-drain` sends the outbox at the start of every `land`, before
   `nothing to land`, in any repository. It prints `land: outbox 1 sent`, or
-  `land: outbox 1 wait to send: <why>` while entries remain.
+  `land: outbox 1 wait to send: <why>` while entries remain. After one feed
+  does not answer, the run sends it nothing more, so a hanging feed costs one
+  timeout (30 s per call, 10 minutes per PUT).
 - `feed-event` is `land event <sha> --kind --state --title [--url]
 [--detail-file] [--repairs]`. It commits `event.json`, with no parent, pushes
   it to `refs/land-events/<sha>/<id>`, posts the notice, and prints
@@ -121,8 +127,11 @@ Preconditions:
   note holds the feed address", "a link to a missing file, a recording over
   200 MB and a local recording without a feed key each fail before the gate
   with nothing pushed", "with the feed unreachable, land pushes, the outbox
-  holds the file, and the next land uploads it and empties the outbox", "land
-  event pushes refs/land-events/<sha>/<id> holding the event, notifies the
+  holds the file, and the next land uploads it and empties the outbox", "a
+  note may link a file the repository tracks and show a link in code: land
+  uploads the file, keeps it, and leaves the code as written", "a feed that
+  refuses the recording and the event, as one without the App does, drops
+  them with why, and land still succeeds", "land event pushes refs/land-events/<sha>/<id> holding the event, notifies the
   feed, and keeps the notice in the outbox when the feed is down".
 
 ## Gotchas

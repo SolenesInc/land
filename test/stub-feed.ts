@@ -14,7 +14,8 @@ const name = "[A-Za-z0-9_.-]+"
 const mediaPath = new RegExp(`^/api/media/${name}/${name}/([0-9a-f]{40})/([0-9a-f]{64})(/uploaded)?$`)
 const eventPath = new RegExp(`^/api/landings/${name}/${name}/([0-9a-f]{40})/events/([0-9a-f]{40})$`)
 
-export const stubFeed = (origin: string, { port = 0, onRequest = (_: Request) => {} } = {}) => {
+// installed: false answers as the real feed does for a repository without the App: 404.
+export const stubFeed = (origin: string, { port = 0, installed = true, onRequest = (_: Request) => {} } = {}) => {
   const requests: Request[] = []
   const stored = new Map<string, string>()
   const listed = (head: string, sha256: string) => {
@@ -34,6 +35,7 @@ export const stubFeed = (origin: string, { port = 0, onRequest = (_: Request) =>
       }
       requests.push(seen)
       onRequest(seen)
+      if (!installed && path.startsWith("/api/")) return new Response("not installed\n", { status: 404 })
       const media = request.method === "POST" ? path.match(mediaPath) : null
       if (media) {
         const [, head, sha256, done] = media as unknown as [string, string, string, string?]

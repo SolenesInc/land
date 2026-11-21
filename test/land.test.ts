@@ -730,7 +730,8 @@ test("a failing record command makes land exit with its status and print no line
   expect(ran.err).toContain("failed with status 7")
 })
 
-const feedOf = (w: ReturnType<typeof world>, port = 0) => stubFeed(join(w.dir, "origin.git"), { port })
+const feedOf = (w: ReturnType<typeof world>, port = 0, installed = true) =>
+  stubFeed(join(w.dir, "origin.git"), { port, installed })
 
 // A clone whose origin is SolenesInc/demo on GitHub, as configured, while git reaches the world's
 // origin.git, and whose declaration names the feed.
@@ -936,4 +937,53 @@ test("land event pushes refs/land-events/<sha>/<id> holding the event, notifies 
 
   const bad = await event("--kind", "x", "--state", "maybe", "--title", "t")
   expect(bad.status).toBe(2)
+})
+
+test("a note may link a file the repository tracks and show a link in code: land uploads the file, keeps it, and leaves the code as written", async () => {
+  const w = world()
+  const feed = feedOf(w)
+  const lander = feedClone(w, feed.url)
+  mkdirSync(join(lander, "docs"))
+  w.commit(lander, "docs/diagram.png", "a diagram\n")
+  const note =
+    "The flow.\n\n![flow](docs/diagram.png)\n\n`land record` prints `![x](.land/media/x.mp4)`.\n\n```\n![y](.land/media/y.mp4)\n```\n"
+  mkdirSync(join(lander, ".land"), { recursive: true })
+  writeFileSync(join(lander, ".land", "note.md"), note)
+  const head = w.commit(lander, "story.txt", "two\n")
+
+  const landed = await w.land(lander)
+  feed.stop()
+
+  expect(landed).toMatchObject({ status: 0, err: "" })
+  expect(landed.out).toContain("land: note   .land/note.md, 1 recording\n")
+  expect(landed.out).toContain("land: media  1 recording uploaded\n")
+  const address = `${feed.url}/m/SolenesInc/demo/${sha256("a diagram\n")}.png`
+  expect(w.landing(head).note).toBe(note.replace("](docs/diagram.png)", `](${address})`))
+  expect(readFileSync(join(lander, "docs", "diagram.png"), "utf8")).toBe("a diagram\n")
+  expect(w.git(lander, "status", "--porcelain")).toBe("")
+})
+
+test("a feed that refuses the recording and the event, as one without the App does, drops them with why, and land still succeeds", async () => {
+  const w = world()
+  const feed = feedOf(w, 0, false)
+  const lander = feedClone(w, feed.url)
+  runLand(w, lander, "record", "demo.png")
+  writeFileSync(join(lander, ".land", "note.md"), "![demo](.land/media/demo.png)\n")
+  const head = w.commit(lander, "story.txt", "two\n")
+
+  const landed = await w.land(lander)
+  const told = await w.start(lander, "true", {}, ["event", head, "--kind", "stage", "--state", "info", "--title", "t"])
+    .result
+  feed.stop()
+
+  expect(landed.status).toBe(0)
+  expect(w.main()).toBe(head)
+  expect(landed.out).toContain(
+    "land: media  .land/media/demo.png is not uploaded: the feed answered 404; is the Attn Land App installed on SolenesInc/demo?\n",
+  )
+  expect(told.status).toBe(0)
+  expect(told.out).toContain(
+    "pushed; the feed refused the notice: the feed answered 404; is the Attn Land App installed",
+  )
+  expect(outbox(w)).toEqual([])
 })

@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises"
 import { Effect, Schema } from "effect"
 import { readDeclaration } from "./declaration.ts"
 import { LandFailed } from "./failure.ts"
-import { githubRepository, notify, originUrl } from "./feed.ts"
+import { githubRepository, notify, originUrl, type Failure } from "./feed.ts"
 import { git, gitOk, gitWith, run } from "./git.ts"
 import { keepEvent } from "./outbox.ts"
 import { Event } from "./schema.ts"
@@ -91,11 +91,19 @@ export const event = (args: ReadonlyArray<string>) =>
     const pushed = yield* git("push", "--quiet", url, `${id}:${ref}`)
     if (pushed.status !== 0) return yield* new LandFailed({ message: `git push ${ref} failed:\n${pushed.err}` })
 
-    const why = yield* notify({ feed, at, sha: landing, id }).pipe(
+    const failure = yield* notify({ feed, at, sha: landing, id }).pipe(
       Effect.as(undefined),
-      Effect.catch((error: string) => Effect.succeed(error)),
+      Effect.catch((failure: Failure) => Effect.succeed(failure)),
     )
-    if (why === undefined) return console.log(`land: event  ${ref} pushed; the feed has it`)
-    yield* keepEvent({ feed, at, sha: landing, id })
-    console.log(`land: event  ${ref} pushed; the notice waits in the outbox: ${why}`)
+    if (failure === undefined) return console.log(`land: event  ${ref} pushed; the feed has it`)
+    if (failure.kind === "refused") {
+      return console.log(
+        `land: event  ${ref} pushed; the feed refused the notice: ${failure.why}; is the Attn Land App installed on ${at.owner}/${at.repo}?`,
+      )
+    }
+    const kept = yield* keepEvent({ feed, at, sha: landing, id }).pipe(
+      Effect.as(`the notice waits in the outbox: ${failure.why}`),
+      Effect.catch((why: string) => Effect.succeed(`the notice is not sent: ${failure.why}, and ${why}`)),
+    )
+    console.log(`land: event  ${ref} pushed; ${kept}`)
   })

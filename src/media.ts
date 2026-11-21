@@ -1,8 +1,9 @@
 import { rm, stat } from "node:fs/promises"
-import { isAbsolute, join } from "node:path"
+import { isAbsolute, join, relative } from "node:path"
 import { Effect } from "effect"
 import { LandFailed } from "./failure.ts"
-import { githubRepository, originUrl, recordingAddress, upload, type Repository } from "./feed.ts"
+import { githubRepository, originUrl, recordingAddress, upload, type Failure, type Repository } from "./feed.ts"
+import { landDir } from "./land-dir.ts"
 import type { Note } from "./note.ts"
 import { keepRecording } from "./outbox.ts"
 import type { LandingRecord } from "./schema.ts"
@@ -43,17 +44,27 @@ const decode = (target: string) => {
   }
 }
 
+// The note with its code blanked out, so a link shown as an example in a code span or a fenced
+// block is no link. Positions stay where they were.
+const outsideCode = (text: string) =>
+  text.replace(/^(```|~~~)[^\n]*\n[\s\S]*?(?:^\1[^\n]*$|(?![\s\S]))|`+[^`\n]*?`+/gm, (code) =>
+    code.replace(/[^\n]/g, " "),
+  )
+
+type Link = { readonly at: number; readonly length: number; readonly link: string; readonly rest: string }
+
 // The note's links to local media files. land record prints them relative to the repository
 // root, so a relative link resolves from there.
 const localMedia = (root: string, text: string) => {
-  const found: { link: string; path: string; ext: Ext }[] = []
-  for (const match of text.matchAll(linkPattern)) {
+  const found: (Link & { path: string; ext: Ext })[] = []
+  for (const match of outsideCode(text).matchAll(linkPattern)) {
     const raw = match[1]!.startsWith("<") ? match[1]!.slice(1, -1) : match[1]!
     if (!isLocal(raw)) continue
     const file = decode(raw.replace(/[?#].*$/, ""))
     const ext = extensions[file.split(".").pop()!.toLowerCase()]
     if (ext === undefined || !file.includes(".")) continue
-    found.push({ link: raw, path: isAbsolute(file) ? file : join(root, file), ext })
+    const path = isAbsolute(file) ? file : join(root, file)
+    found.push({ at: match.index, length: match[0].length, link: raw, rest: match[2]!, path, ext })
   }
   return found
 }
@@ -105,46 +116,66 @@ to land.toml, or link no local file`,
         message: `the note ${note.shown} links the recording ${links[0]!.link}, and the feed hosts recordings of GitHub repositories only; origin is ${yield* originUrl}`,
       })
     }
-    const recordings: Recording[] = []
+    // Each file once, however many links name it.
+    const recordings = new Map<string, Recording>()
+    const address: string[] = []
     for (const [i, link] of links.entries()) {
-      recordings.push({ ...link, sha256: yield* hash(link.path), bytes: sizes[i]! })
+      const sha256 = yield* hash(link.path)
+      if (!recordings.has(sha256))
+        recordings.set(sha256, { link: link.link, path: link.path, sha256, ext: link.ext, bytes: sizes[i]! })
+      address.push(recordingAddress(feed, at, sha256, recordings.get(sha256)!.ext))
     }
-    const address = new Map(recordings.map((r) => [r.link, recordingAddress(feed, at, r.sha256, r.ext)]))
-    const text = note.text.replace(linkPattern, (whole, target: string, rest: string) => {
-      const raw = target.startsWith("<") ? target.slice(1, -1) : target
-      const to = address.get(raw)
-      return to === undefined ? whole : `](${to}${rest}`
-    })
-    return { text, recordings, at } satisfies NoteMedia
+    let text = note.text
+    for (const [i, link] of [...links.entries()].reverse()) {
+      text = `${text.slice(0, link.at)}](${address[i]}${link.rest}${text.slice(link.at + link.length)}`
+    }
+    return { text, recordings: [...recordings.values()], at } satisfies NoteMedia
   })
 
-// What landing.json lists: each file once.
-export const listed = (recordings: ReadonlyArray<Recording>): LandingRecord["recordings"] => {
-  const seen = new Map<string, LandingRecord["recordings"][number]>()
-  for (const r of recordings) seen.set(r.sha256, { sha256: r.sha256, ext: r.ext, bytes: r.bytes })
-  return [...seen.values()]
-}
+export const listed = (recordings: ReadonlyArray<Recording>): LandingRecord["recordings"] =>
+  recordings.map((r) => ({ sha256: r.sha256, ext: r.ext, bytes: r.bytes }))
 
 export const plural = (n: number) => `${n} recording${n === 1 ? "" : "s"}`
 
 // After the push (D23, D24): upload each recording. One that does not go waits in the outbox,
-// and land says why. land deletes the files that went, as it deletes the note.
-export const uploadRecordings = (feed: string, at: Repository, head: string, recordings: ReadonlyArray<Recording>) =>
+// and land says why. land deletes the files that went, as it deletes the note, but only those in
+// .land/: a note may link a file the repository tracks, or one outside it.
+export const uploadRecordings = (
+  root: string,
+  feed: string,
+  at: Repository,
+  head: string,
+  recordings: ReadonlyArray<Recording>,
+) =>
   Effect.gen(function* () {
-    const files = new Map(recordings.map((r) => [r.sha256, r]))
     let uploaded = 0
-    for (const r of files.values()) {
-      const why = yield* upload({ feed, at, head, sha256: r.sha256, path: r.path }).pipe(
-        Effect.as(undefined),
-        Effect.catch((error: string) => Effect.succeed(error)),
-      )
-      if (why === undefined) {
+    let down: Failure | undefined
+    for (const r of recordings) {
+      const failure =
+        down ??
+        (yield* upload({ feed, at, head, sha256: r.sha256, path: r.path }).pipe(
+          Effect.as(undefined),
+          Effect.catch((failure: Failure) => Effect.succeed(failure)),
+        ))
+      if (failure === undefined) {
         uploaded++
-        yield* Effect.promise(() => rm(r.path, { force: true }))
+        if (!relative(join(root, landDir), r.path).startsWith("..")) {
+          yield* Effect.promise(() => rm(r.path, { force: true }))
+        }
         continue
       }
-      yield* keepRecording({ feed, at, head, sha256: r.sha256, ext: r.ext }, r.path)
-      console.log(`land: media  ${r.link} waits in the outbox: ${why}`)
+      if (failure.kind === "unreachable") down = failure
+      if (failure.kind === "refused") {
+        console.log(
+          `land: media  ${r.link} is not uploaded: ${failure.why}; is the Attn Land App installed on ${at.owner}/${at.repo}?`,
+        )
+        continue
+      }
+      const kept = yield* keepRecording({ feed, at, head, sha256: r.sha256, ext: r.ext }, r.path).pipe(
+        Effect.as(`waits in the outbox: ${failure.why}`),
+        Effect.catch((why: string) => Effect.succeed(`is not uploaded: ${failure.why}, and ${why}`)),
+      )
+      console.log(`land: media  ${r.link} ${kept}`)
     }
     if (uploaded > 0) console.log(`land: media  ${plural(uploaded)} uploaded`)
   })
