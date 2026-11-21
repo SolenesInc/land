@@ -1,2 +1,3 @@
 gate = "bun run check"
 feed = "https://land-feed.caketroll.cloud"
+record = "bun scripts/record.ts"

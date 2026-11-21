@@ -11,3 +11,7 @@ Before you report a change done, drive it with the `drive-land` skill
 (`.agents/skills/drive-land`) and show its evidence. A change that adds,
 removes or alters a way into a feature updates that feature's file in
 `.agents/skills/drive-land/features` in the same landing.
+
+A note can show the change running: `land record <name> <command>...` runs the
+command and writes a video of its output to `.land/media/<name>.mp4` (it needs
+Chrome and ffmpeg), and prints the markdown line to paste into the note.

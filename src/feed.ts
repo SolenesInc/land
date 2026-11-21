@@ -25,9 +25,10 @@ export const landingAddress = (feed: string, at: Repository, head: string) =>
 const trim = (feed: string) => feed.replace(/\/+$/, "")
 
 // Tripwires. Receipts, 2026-11-21, from Victor's Mac: a POST to the live feed that reads a ref
-// on GitHub answered in 0.37 to 0.59 s, so a call gets 30 s. 18.4 MB, the largest recording
-// measured (F36), reached Cloudflare's edge, where R2 sits, in 2.6 to 3.1 s; a PUT gets 10
-// minutes, which still carries the 200 MB tripwire over a 2.7 Mbit/s uplink.
+// on GitHub answered in 0.37 to 0.59 s, so a call gets 30 s. A 3.66 MB PUT to the feed's R2
+// bucket took about 1 s (2026-11-21), and 18.4 MB, the largest recording measured (F36),
+// reached Cloudflare's edge in 2.6 to 3.1 s; a PUT gets 10 minutes, which still carries the
+// 200 MB tripwire over a 2.7 Mbit/s uplink.
 const callTimeout = 30_000
 const putTimeout = 600_000
 
