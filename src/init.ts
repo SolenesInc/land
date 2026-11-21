@@ -69,6 +69,10 @@ Before you land a change, run \`land guide\` and follow it.
 // The guidance files agents read. The first that exists gets the declaration.
 const guidanceFiles = ["AGENTS.md", "CLAUDE.md"]
 
+// D29: a repository joins the feed with the feed key and the App installed on it.
+const feed = "https://land-feed.caketroll.cloud"
+const appInstall = "https://github.com/apps/attn-land/installations/new"
+
 const say = (subject: string, line: string) => console.log(`land: ${subject.padEnd(10)} ${line}`)
 
 export const init = Effect.gen(function* () {
@@ -78,8 +82,14 @@ export const init = Effect.gen(function* () {
 
   let main: string
   if (existsSync(join(root, declarationFile))) {
-    main = (yield* readDeclaration(root)).main ?? "main"
+    const declaration = yield* readDeclaration(root)
+    main = declaration.main ?? "main"
     say(declarationFile, "exists, so land left it as it is")
+    if (declaration.feed === undefined) {
+      decide.push(
+        `Whether landings show in the feed. To join it, add feed = ${JSON.stringify(feed)} to ${declarationFile}, and install the App: ${appInstall}`,
+      )
+    }
   } else {
     main = yield* defaultBranch
     const proposal = proposeGate(root, yield* packageScripts(root))
@@ -87,16 +97,20 @@ export const init = Effect.gen(function* () {
       say(declarationFile, "not written: land found no check to propose as the gate")
       const branch = main === "main" ? "" : `, and main = ${JSON.stringify(main)} on a line of its own`
       decide.push(
-        `Which command must pass before every push. Write it in ${declarationFile} as gate = "<command>"${branch}.`,
+        `Which command must pass before every push. Write it in ${declarationFile} as gate = "<command>"${branch}, with feed = ${JSON.stringify(feed)} so landings show in the feed once the App is installed: ${appInstall}`,
       )
     } else {
       const branch = main === "main" ? "" : `main = ${JSON.stringify(main)}\n`
       yield* Effect.promise(() =>
-        writeFile(join(root, declarationFile), `gate = ${JSON.stringify(proposal.gate)}\n${branch}`),
+        writeFile(
+          join(root, declarationFile),
+          `gate = ${JSON.stringify(proposal.gate)}\n${branch}feed = ${JSON.stringify(feed)}\n`,
+        ),
       )
       written.push(declarationFile)
       say(declarationFile, `wrote gate = ${JSON.stringify(proposal.gate)}, from ${proposal.from}`)
       if (branch !== "") say(declarationFile, `wrote main = ${JSON.stringify(main)}, the branch origin/HEAD names`)
+      say(declarationFile, `wrote feed = ${JSON.stringify(feed)}, where landings show`)
       decide.push(
         `Whether ${proposal.gate} should run before every push. It holds every landing until it passes, so name a faster check in ${declarationFile} if it is slow, and leave the rest to CI.`,
       )
@@ -129,6 +143,9 @@ export const init = Effect.gen(function* () {
 
   if (decide.length > 0) {
     console.log(`\nDecide:\n${decide.map((line) => `  - ${line}`).join("\n")}`)
+  }
+  if (written.includes(declarationFile)) {
+    console.log(`\nInstall the App on the repository, so the feed shows its landings: ${appInstall}`)
   }
   if (written.length > 0) {
     console.log(`\nThen commit ${written.join(" and ")}, and land the commit with land.`)

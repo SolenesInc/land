@@ -12,6 +12,8 @@ branch other than `main` to land on.
 - `decl-main` lands on the branch that `main` names.
 - `decl-record` names the `record` command that `land record` runs; see
   [Record](record.md).
+- `decl-feed` names the feed that shows landings and hosts their recordings;
+  see [Feed](feed.md).
 - `decl-missing` refuses to land in a repository with no `land.toml`.
 - `decl-unknown-key` refuses a key it does not know, so a misspelled `gate`
   never lands unchecked.

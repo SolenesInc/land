@@ -3,6 +3,7 @@ import type { LandFailed } from "./failure.ts"
 import guide from "./guide.md" with { type: "text" }
 import reviewGuide from "./guide-review.md" with { type: "text" }
 import sheriffGuide from "./guide-sheriff.md" with { type: "text" }
+import { event } from "./event.ts"
 import { init } from "./init.ts"
 import { land } from "./landing.ts"
 import { record } from "./record.ts"
@@ -17,6 +18,9 @@ Usage:
   land --note <file>   land them with the note in <file>
   land init            adopt land in this repository: write land.toml and the trunk declaration
   land record [args]   run the record command, and print a markdown line for each recording it made
+  land event <sha> --kind <kind> --state pass|fail|run|info --title <title>
+             [--url <url>] [--detail-file <file>] [--repairs <sha>]
+                       push an event about the landing <sha> to refs/land-events/, and tell the feed
   land guide           print the procedure for landing a change
   land guide review    print the procedure for reviewing what landed on main
   land guide sheriff   print the procedure for getting main's CI green
@@ -24,11 +28,15 @@ Usage:
   land --version       print land's version
 
 The note is markdown for the readers of main. The landing ref's commit holds it,
-beside landing.json, and land deletes the note file after the push.
+beside landing.json, and land deletes the note file after the push. A note that
+links a local recording, such as .land/media/demo.mp4, links it by its feed address
+instead, and land uploads it after the push. What land cannot send to the feed
+waits in the outbox, $XDG_STATE_HOME/land/outbox, and every later land sends it.
 
 land.toml, at the repository root:
   gate = "bun run check"   a shell command; land pushes only when it exits 0
   main = "main"            the branch to land on; "main" when absent
+  feed = "<url>"           the feed that shows landings and hosts their recordings
   record = "<command>"     a shell command that writes recordings into $LAND_MEDIA, which is
                            .land/media/; land record runs it at the repository root with its
                            arguments appended
@@ -48,6 +56,7 @@ const report = async (command: Effect.Effect<void, LandFailed>) => {
 
 const main = async (args: ReadonlyArray<string>) => {
   if (args[0] === "record") return report(record(args.slice(1)))
+  if (args[0] === "event") return report(event(args.slice(1)))
   if (args.length === 2 && args[0] === "--note") return report(land({ note: args[1] }))
   switch (args.join(" ")) {
     case "":

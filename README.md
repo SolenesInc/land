@@ -125,6 +125,56 @@ record = "scripts/record.sh"
 `land` adds `.land/` to the clone's `.git/info/exclude`, so the recordings
 never block a landing and no repository commits an ignore rule.
 
+## Show landings in the feed
+
+The feed, `https://land-feed.caketroll.cloud`, shows each landing with its
+note and recordings. A repository joins it by installing the
+[Attn Land App](https://github.com/apps/attn-land/installations/new) and
+naming the feed in `land.toml`, which `land init` writes:
+
+```toml
+feed = "https://land-feed.caketroll.cloud"
+```
+
+A note may then link a recording that `land record` made. Before the gate,
+`land` rewrites each local link to the recording's feed address,
+`<feed>/m/<owner>/<repo>/<sha256>.<ext>`, and lists the file in
+`landing.json` by its SHA-256, extension and size. After the push it uploads
+each file, deletes the ones that went with the note, and prints the landing's
+address:
+
+```text
+$ land
+land: note   .land/note.md, 1 recording
+land: gate   bun run check   ok in 1m 49s
+land: push   main is at 41d07be
+land: media  1 recording uploaded
+land: feed   https://land-feed.caketroll.cloud/SolenesInc/land/41d07be
+```
+
+`land` sends the feed no credential: the feed uploads only what the landing
+ref on GitHub lists. A link to a missing file, a recording over 200 MB, and a
+local recording with no `feed` key each stop `land` before the gate.
+
+`land` never fails because of the feed. What it cannot send waits in the
+outbox, `$XDG_STATE_HOME/land/outbox` or `~/.local/state/land/outbox`, and
+every later `land`, in any repository, sends it first and prints how many
+still wait.
+
+`land event` tells the feed something that happened after a landing, such as
+a review finding or a repair:
+
+```text
+$ land event 41d07be --kind finding --state fail --title "banner flickers" --detail-file finding.md
+land: event  refs/land-events/41d07be…/9c2e1f0… pushed; the feed has it
+```
+
+It commits `event.json`, with no parent, pushes the commit to
+`refs/land-events/<landing sha>/<event commit sha>`, then notifies the feed,
+which reads the ref before it stores the event. `--state` is `pass`, `fail`,
+`run` or `info`; `--url`, `--detail-file` (markdown) and `--repairs <sha>`
+are optional. A notice the feed does not take waits in the outbox.
+
 ## Keep main healthy
 
 A landing passes the gate, but CI on `main` runs the whole check and can still

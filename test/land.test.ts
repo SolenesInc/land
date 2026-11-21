@@ -2,6 +2,7 @@ import { afterEach, beforeAll, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { stubFeed } from "./stub-feed.ts"
 
 const root = join(import.meta.dir, "..")
 const bin = join(root, "dist", "land")
@@ -454,11 +455,15 @@ test("land init writes land.toml and the trunk declaration, and the repository t
   const first = w.landInit(lander)
 
   expect(first).toMatchObject({ status: 0, err: "" })
-  expect(read(join(lander, "land.toml"))).toBe('gate = "bun run check"\n')
+  expect(read(join(lander, "land.toml"))).toBe('gate = "bun run check"\nfeed = "https://land-feed.caketroll.cloud"\n')
   expect(read(join(lander, "AGENTS.md"))).toBe(
     "# Project\n\nSome guidance.\n\n## Landing\n\nThis repository lands on `main` with `land`, with no pull request.\nBefore you land a change, run `land guide` and follow it.\n",
   )
   expect(first.out).toContain('land: land.toml  wrote gate = "bun run check", from the check script in package.json')
+  expect(first.out).toContain('land: land.toml  wrote feed = "https://land-feed.caketroll.cloud", where landings show')
+  expect(first.out).toContain(
+    "Install the App on the repository, so the feed shows its landings: https://github.com/apps/attn-land/installations/new",
+  )
   expect(first.out).toContain("Then commit land.toml and AGENTS.md, and land the commit with land.")
 
   w.git(lander, "add", "land.toml", "AGENTS.md")
@@ -501,24 +506,29 @@ test("land init leaves an existing land.toml as it is", () => {
   expect(read(join(lander, "CLAUDE.md"))).toContain("## Landing\n\nThis repository lands on `main` with `land`")
   expect(read(join(lander, "AGENTS.md"))).toBeUndefined()
   expect(ran.out).toContain("Then commit CLAUDE.md, and land the commit with land.")
+  // That land.toml names no feed, so init says how to join it.
+  expect(ran.out).toContain(
+    'add feed = "https://land-feed.caketroll.cloud" to land.toml, and install the App: https://github.com/apps/attn-land/installations/new',
+  )
 })
 
 test("land init proposes the gate from what the repository has", () => {
+  const feed = 'feed = "https://land-feed.caketroll.cloud"\n'
   const cases: ReadonlyArray<{ files: Record<string, string>; toml: string | undefined }> = [
-    { files: { Makefile: "build:\n\ttrue\ncheck: build\n\ttrue\n" }, toml: 'gate = "make check"\n' },
-    { files: { Makefile: "test:\n\ttrue\n" }, toml: 'gate = "make test"\n' },
+    { files: { Makefile: "build:\n\ttrue\ncheck: build\n\ttrue\n" }, toml: `gate = "make check"\n${feed}` },
+    { files: { Makefile: "test:\n\ttrue\n" }, toml: `gate = "make test"\n${feed}` },
     {
       files: { "package.json": JSON.stringify({ scripts: { test: "true" } }), "pnpm-lock.yaml": "" },
-      toml: 'gate = "pnpm run test"\n',
+      toml: `gate = "pnpm run test"\n${feed}`,
     },
     {
       files: { "package.json": JSON.stringify({ scripts: { check: "true" } }), Makefile: "check:\n" },
-      toml: 'gate = "npm run check"\n',
+      toml: `gate = "npm run check"\n${feed}`,
     },
-    { files: { "go.mod": "module example.com/x\n" }, toml: 'gate = "go test ./..."\n' },
-    { files: { "Cargo.toml": "[package]\n" }, toml: 'gate = "cargo test"\n' },
+    { files: { "go.mod": "module example.com/x\n" }, toml: `gate = "go test ./..."\n${feed}` },
+    { files: { "Cargo.toml": "[package]\n" }, toml: `gate = "cargo test"\n${feed}` },
     { files: { "README.md": "# Nothing to run\n" }, toml: undefined },
-    { files: { Makefile: "check := x\ntest:\n\ttrue\n" }, toml: 'gate = "make test"\n' },
+    { files: { Makefile: "check := x\ntest:\n\ttrue\n" }, toml: `gate = "make test"\n${feed}` },
     {
       files: { "package.json": JSON.stringify({ scripts: { test: 'echo "Error: no test specified" && exit 1' } }) },
       toml: undefined,
@@ -546,7 +556,9 @@ test("land init names the branch origin lands on when it is not main", () => {
   const ran = w.landInit(lander)
 
   expect(ran.status).toBe(0)
-  expect(read(join(lander, "land.toml"))).toBe('gate = "go test ./..."\nmain = "master"\n')
+  expect(read(join(lander, "land.toml"))).toBe(
+    'gate = "go test ./..."\nmain = "master"\nfeed = "https://land-feed.caketroll.cloud"\n',
+  )
   expect(read(join(lander, "AGENTS.md"))).toBe(
     "This repository lands on `master` with `land`, with no pull request.\nBefore you land a change, run `land guide` and follow it.\n",
   )
@@ -716,4 +728,212 @@ test("a failing record command makes land exit with its status and print no line
   expect(ran.status).toBe(7)
   expect(ran.out).toBe("")
   expect(ran.err).toContain("failed with status 7")
+})
+
+const feedOf = (w: ReturnType<typeof world>, port = 0) => stubFeed(join(w.dir, "origin.git"), { port })
+
+// A clone whose origin is SolenesInc/demo on GitHub, as configured, while git reaches the world's
+// origin.git, and whose declaration names the feed.
+const feedClone = (w: ReturnType<typeof world>, feed: string | undefined) => {
+  const lander = w.clone("lander")
+  const github = "git@github.com:SolenesInc/demo.git"
+  w.git(lander, "config", "remote.origin.url", github)
+  w.git(lander, "config", `url.${join(w.dir, "origin.git")}.insteadOf`, github)
+  const declared = feed === undefined ? "" : `feed = "${feed}"\n`
+  writeFileSync(join(lander, "land.toml"), `gate = 'eval "$TEST_GATE"'\nrecord = "sh record.sh"\n${declared}`)
+  writeFileSync(join(lander, "record.sh"), 'echo "recorded $1" > "$LAND_MEDIA/$1"\n')
+  w.git(lander, "add", ".")
+  w.git(lander, "commit", "--quiet", "-m", "Declare the feed")
+  return lander
+}
+
+const sha256 = (text: string) => new Bun.CryptoHasher("sha256").update(text).digest("hex")
+const outbox = (w: ReturnType<typeof world>) => {
+  const dir = join(w.dir, ".local", "state", "land", "outbox")
+  return existsSync(dir) ? Bun.spawnSync(["ls", dir]).stdout.toString().split("\n").filter(Boolean) : []
+}
+
+test("a note linking a local recording lists it in landing.json, uploads it after the push with no credential, and the pushed note holds the feed address", async () => {
+  const w = world()
+  const feed = feedOf(w)
+  const lander = feedClone(w, feed.url)
+  const link = runLand(w, lander, "record", "banner flicker.mp4").out.trim()
+  writeFileSync(
+    join(lander, ".land", "note.md"),
+    `The banner no longer flickers.\n\n${link}\n\n![again](${link.slice(link.indexOf("(") + 1, -1)})\n`,
+  )
+  const head = w.commit(lander, "story.txt", "two\n")
+
+  const landed = await w.land(lander)
+  feed.stop()
+
+  expect(landed).toMatchObject({ status: 0, err: "" })
+  const hash = sha256("recorded banner flicker.mp4\n")
+  const address = `${feed.url}/m/SolenesInc/demo/${hash}.mp4`
+  expect(landed.out).toContain("land: note   .land/note.md, 1 recording\n")
+  expect(landed.out).toContain(`land: push   main is at ${head.slice(0, 7)}\nland: media  1 recording uploaded\n`)
+  expect(landed.out).toContain(`land: feed   ${feed.url}/SolenesInc/demo/${head.slice(0, 7)}\n`)
+  expect(w.landing(head).record.recordings).toEqual([{ sha256: hash, ext: "mp4", bytes: 28 }])
+  expect(w.landing(head).note).toBe(
+    `The banner no longer flickers.\n\n![banner flicker](${address})\n\n![again](${address})\n`,
+  )
+  expect(feed.stored.get(hash)).toBe("recorded banner flicker.mp4\n")
+  expect(feed.requests.map((r) => `${r.method} ${r.path}`)).toEqual([
+    `POST /api/media/SolenesInc/demo/${head}/${hash}`,
+    `PUT /r2/${hash}`,
+    `POST /api/media/SolenesInc/demo/${head}/${hash}/uploaded`,
+  ])
+  expect(feed.requests.every((r) => r.credential === null)).toBe(true)
+  // The note and the recording it uploaded are gone; nothing waits.
+  expect(existsSync(join(lander, ".land", "note.md"))).toBe(false)
+  expect(existsSync(join(lander, ".land", "media", "banner flicker.mp4"))).toBe(false)
+  expect(outbox(w)).toEqual([])
+})
+
+test("a link to a missing file, a recording over 200 MB and a local recording without a feed key each fail before the gate with nothing pushed", async () => {
+  const cases = [
+    {
+      feed: "http://127.0.0.1:9",
+      note: "![gone](.land/media/gone.mp4)\n",
+      says: "the note .land/note.md links .land/media/gone.mp4, and there is no such file; nothing was pushed",
+    },
+    {
+      feed: "http://127.0.0.1:9",
+      note: "![huge](.land/media/huge.webm)\n",
+      big: "huge.webm",
+      says: "the note .land/note.md links .land/media/huge.webm, which is 201 MB; the feed takes recordings up to 200 MB",
+    },
+    {
+      feed: undefined,
+      note: "![shot](.land/media/shot.png)\n",
+      file: "shot.png",
+      says: 'the note .land/note.md links the recording .land/media/shot.png, and land.toml names no feed to host it; add\n  feed = "https://land-feed.caketroll.cloud"',
+    },
+  ]
+  for (const c of cases) {
+    const w = world()
+    const lander = feedClone(w, c.feed)
+    mkdirSync(join(lander, ".land", "media"), { recursive: true })
+    if (c.file) writeFileSync(join(lander, ".land", "media", c.file), "shot\n")
+    // Sparse, so the test writes no 201 MB.
+    if (c.big) Bun.spawnSync(["truncate", "-s", String(201 * 1024 * 1024), join(lander, ".land", "media", c.big)])
+    writeFileSync(join(lander, ".land", "note.md"), c.note)
+    w.commit(lander, "story.txt", "two\n")
+    const before = w.main()
+
+    const landed = await w.land(lander, "touch gate-ran")
+
+    expect({ status: landed.status, err: landed.err }).toEqual({
+      status: 1,
+      err: expect.stringContaining(`land: ${c.says}`),
+    })
+    expect(existsSync(join(lander, "gate-ran"))).toBe(false)
+    expect(w.main()).toBe(before)
+    expect(w.landingRefs()).toEqual([])
+    expect(readFileSync(join(lander, ".land", "note.md"), "utf8")).toBe(c.note)
+  }
+})
+
+test("with the feed unreachable, land pushes, the outbox holds the file, and the next land uploads it and empties the outbox", async () => {
+  const w = world()
+  const down = feedOf(w)
+  down.stop() // nothing listens on its port now
+  const lander = feedClone(w, down.url)
+  runLand(w, lander, "record", "demo.png")
+  writeFileSync(join(lander, ".land", "note.md"), "A demo.\n\n![demo](.land/media/demo.png)\n")
+  const head = w.commit(lander, "story.txt", "two\n")
+  const hash = sha256("recorded demo.png\n")
+
+  const first = await w.land(lander)
+
+  expect(first.status).toBe(0)
+  expect(w.main()).toBe(head)
+  expect(first.out).toContain(
+    `land: push   main is at ${head.slice(0, 7)}\nland: media  .land/media/demo.png waits in the outbox: the feed did not answer\n`,
+  )
+  expect(w.landing(head).note).toBe(`A demo.\n\n![demo](${down.url}/m/SolenesInc/demo/${hash}.png)\n`)
+  expect(outbox(w)).toEqual([`recording~SolenesInc~demo~${hash}.bytes`, `recording~SolenesInc~demo~${hash}.json`])
+  // The note is gone, since it landed; the recording stays, since it did not upload.
+  expect(existsSync(join(lander, ".land", "note.md"))).toBe(false)
+  expect(existsSync(join(lander, ".land", "media", "demo.png"))).toBe(true)
+
+  // Still down: the next land says what waits.
+  const waiting = await w.land(lander)
+  expect(waiting.out).toContain("land: outbox 1 wait to send: the feed did not answer\nland: nothing to land\n")
+
+  const up = feedOf(w, down.port)
+  const next = await w.land(lander)
+  up.stop()
+
+  expect(next.out).toContain("land: outbox 1 sent\nland: nothing to land\n")
+  expect(up.stored.get(hash)).toBe("recorded demo.png\n")
+  expect(outbox(w)).toEqual([])
+  const quiet = await w.land(lander)
+  expect(quiet.out).toBe("land: nothing to land\n")
+})
+
+test("land event pushes refs/land-events/<sha>/<id> holding the event, notifies the feed, and keeps the notice in the outbox when the feed is down", async () => {
+  const w = world()
+  const feed = feedOf(w)
+  const lander = feedClone(w, feed.url)
+  const head = w.commit(lander, "story.txt", "two\n")
+  await w.land(lander)
+  writeFileSync(join(w.dir, "finding.md"), "It flickers on **resize**.\n")
+  const origin = join(w.dir, "origin.git")
+  const event = (...args: string[]) => w.start(lander, "true", {}, ["event", head.slice(0, 7), ...args]).result
+
+  const told = await event(
+    "--kind",
+    "finding",
+    "--state",
+    "fail",
+    "--title",
+    "banner flickers",
+    "--detail-file",
+    join(w.dir, "finding.md"),
+  )
+
+  expect(told.status).toBe(0)
+  const refs = w.git(origin, "for-each-ref", "--format=%(refname)", `refs/land-events/${head}/`).split("\n")
+  expect(refs.length).toBe(1)
+  const id = refs[0]!.split("/").pop()!
+  expect(told.out).toBe(`land: event  refs/land-events/${head}/${id} pushed; the feed has it\n`)
+  expect(w.git(origin, "rev-list", "--count", id)).toBe("1") // no parent
+  expect(w.git(origin, "ls-tree", "--name-only", id)).toBe("event.json")
+  const body = JSON.parse(w.git(origin, "show", `${id}:event.json`))
+  expect(body).toEqual({
+    kind: "finding",
+    state: "fail",
+    title: "banner flickers",
+    at: expect.stringMatching(/^\d{4}-\d\d-\d\dT/),
+    detail: "It flickers on **resize**.\n",
+  })
+  expect(feed.requests.at(-1)).toEqual({
+    method: "POST",
+    path: `/api/landings/SolenesInc/demo/${head}/events/${id}`,
+    credential: null,
+  })
+
+  // The feed is down: the ref is pushed, and the notice waits; the next land sends it.
+  feed.stop()
+  const later = await event("--kind", "repair", "--state", "pass", "--title", "fixed", "--repairs", head)
+  expect(later.status).toBe(0)
+  const second = w
+    .git(origin, "for-each-ref", "--format=%(refname)", `refs/land-events/${head}/`)
+    .split("\n")
+    .find((r) => !r.endsWith(id))!
+  expect(later.out).toBe(`land: event  ${second} pushed; the notice waits in the outbox: the feed did not answer\n`)
+  expect(outbox(w)).toEqual([`event~SolenesInc~demo~${second.split("/").pop()}.json`])
+
+  const up = feedOf(w, feed.port)
+  const next = await w.land(lander)
+  up.stop()
+  expect(next.out).toContain("land: outbox 1 sent\n")
+  expect(up.requests.map((r) => r.path)).toEqual([
+    `/api/landings/SolenesInc/demo/${head}/events/${second.split("/").pop()}`,
+  ])
+  expect(outbox(w)).toEqual([])
+
+  const bad = await event("--kind", "x", "--state", "maybe", "--title", "t")
+  expect(bad.status).toBe(2)
 })

@@ -77,11 +77,29 @@ Check, and commit. Settle the uncertain ones yourself, or ask.
 
 ## Note
 
+When the change has a visible surface, such as a screen, a page or a
+terminal, record it:
+
+```bash
+land record
+```
+
+`land record` runs the command that `land.toml` names as `record`, and prints
+one markdown line for each recording it made, such as
+`![banner](.land/media/banner.mp4)`.
+
 Write the note for this landing in `.land/note.md`: one sentence for a reader
-of `main` on what changed for them, and a diagram when one helps. `land` adds
-`.land/` to the clone's `.git/info/exclude`, so the note is never committed
-and never stops a landing as an untracked file. To keep the note elsewhere,
-run `land --note <file>` instead of `land`.
+of `main` on what changed for them, the recording's line when you made one,
+and a diagram when one helps. `land` adds `.land/` to the clone's
+`.git/info/exclude`, so the note is never committed and never stops a landing
+as an untracked file. To keep the note elsewhere, run `land --note <file>`
+instead of `land`.
+
+A note may link a local recording only when `land.toml` names a `feed`.
+`land` rewrites each such link to the recording's address on the feed, lists
+the file in the landing, and uploads it after the push. A recording that does
+not upload waits in the outbox on your machine, and every later `land` sends
+it. The landing does not wait for it.
 
 `land` pushes the note with `main`, in the landing ref
 `refs/landings/<head>`, and deletes the note file after the push. When `land`
@@ -106,6 +124,8 @@ land
   branch is as it was, and names the files. Resolve the conflict with
   `git rebase origin/main`, rerun the checks the resolution touches, and run
   `land` again.
+- The note links a local file that does not exist, a recording over 200 MB,
+  or a recording when `land.toml` names no `feed`.
 - The gate fails. `land` exits with the gate's status. Fix the failure and run
   `land` again. If the failure is in code you did not touch and it passes on
   `origin/main`, it may be a flake: run `land` again, and name the test in
@@ -130,6 +150,8 @@ Report where the work was asked for:
 
 - the landed commits, from `land: push   main is at <commit>`, and the commit
   the gate ran on when `main` moved
+- the landing on the feed, from `land: feed   <address>`, and any recording
+  that `land` says waits in the outbox
 - what you checked, on which surface, with the evidence
 - the review: which readers ran, the findings you fixed, and the findings you
   refuted

@@ -11,6 +11,7 @@ repository root.
 | -------- | -------------------------------------------------------------------------------------------------- | --------------------------------------------- |
 | People   | The `land` command in their own shell, in a clone of a repository that has a `land.toml`           | `src/main.ts`, `src/landing.ts`               |
 | People   | `land record`, in a clone of a repository whose `land.toml` names a `record` command               | `src/record.ts`                               |
+| People   | `land event`, and any `land` while the outbox holds entries                                        | `src/event.ts`, `src/outbox.ts`               |
 | People   | `land init`, in a clone of a repository that does not land with `land` yet                         | `src/init.ts`                                 |
 | Agents   | The same command, and the text of `land guide`, which a repository's guidance tells them to follow | `src/main.ts`, `src/guide.md`                 |
 | Runners  | `land guide review` and `land guide sheriff`, which a scheduled or event-started agent follows     | `src/guide-review.md`, `src/guide-sheriff.md` |
@@ -82,6 +83,7 @@ commands, messages, state and proof.
 | [Landing](landing.md)           | People, agents          | Put finished commits on `main`: rebase, gate, push, or stop and say why                                            |
 | [Declaration](declaration.md)   | People, agents          | Tell `land` what a repository's gate is, in `land.toml`                                                            |
 | [Record](record.md)             | People, agents          | Run the repository's record command, and print the markdown line that links each recording                         |
+| [Feed](feed.md)                 | People, agents, runners | Upload a note's recordings, keep what fails in the outbox, and push events to the feed                             |
 | [Init](init.md)                 | People, agents          | Adopt `land` in a repository: write `land.toml` and the trunk declaration                                          |
 | [Push hook](push-hook.md)       | People, agents, git     | Refuse a plain `git push` to `main`, so changes go through the gate                                                |
 | [Trailer hook](trailer-hook.md) | People, agents, git     | Name the attn session and seeds a commit was made in, in its trailers                                              |

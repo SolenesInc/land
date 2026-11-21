@@ -62,8 +62,8 @@ Preconditions:
   `land <version>`, the version in `package.json`. Run
   `drive.ts r do home 'land --help'`: it lists `land`, `land --note <file>`,
   `land init`, `land guide`, `land guide review`, `land guide sheriff`,
-  `land record`, `land --help`, `land --version`, and the keys `gate`, `main`
-  and `record`.
+  `land record`, `land event`, `land --help`, `land --version`, and the keys
+  `gate`, `main`, `feed` and `record`.
 - **Unknown arguments.** Run `drive.ts r do home 'land nonsense'`. It prints
   `land: unknown arguments: nonsense` and the help, and exits 2.
 - **Proof.** The saved guides, the grep, and the saved output of the three

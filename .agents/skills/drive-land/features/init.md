@@ -13,6 +13,10 @@ either file.
   for a `go.mod`, `cargo test` for a `Cargo.toml`, in that order. The script's
   runner follows the lockfile: `bun`, `pnpm`, `yarn`, else `npm`. It skips
   the test script `npm init` writes, which always fails.
+- `init-feed` writes `feed = "https://land-feed.caketroll.cloud"` beside the
+  gate, prints `land: land.toml  wrote feed = "…", where landings show` and
+  the Attn Land App's install link. With an existing `land.toml` that names
+  no feed, it adds a Decide line with the key and the link.
 - `init-broken-package` stops with `land: package.json: <error>` and writes
   nothing when `package.json` does not parse.
 - `init-no-gate` writes no `land.toml` when it finds no check, and says to name
@@ -52,10 +56,13 @@ Preconditions:
 - **Adopt.** Run
   `drive.ts r do lander 'git rm -q land.toml && printf "check:\n\tsh gate.sh\n" > Makefile && git add Makefile && git commit -qm "A Makefile with a check" && land init'`.
   It prints `land: land.toml  wrote gate = "make check", from the check target in the Makefile`,
+  `land: land.toml  wrote feed = "https://land-feed.caketroll.cloud", where landings show`,
   `land: AGENTS.md  created with the trunk declaration`, a Decide list about
-  the gate's speed, and `Then commit land.toml and AGENTS.md`. Exit 0.
+  the gate's speed, `Install the App on the repository, so the feed shows its landings: https://github.com/apps/attn-land/installations/new`,
+  and `Then commit land.toml and AGENTS.md`. Exit 0.
 - **Read what it wrote.** Run
   `drive.ts r do lander 'cat land.toml AGENTS.md'`: `gate = "make check"`,
+  `feed = "https://land-feed.caketroll.cloud"`,
   then the two lines that name `main` and `land guide`.
 - **Again.** Run `drive.ts r do lander 'land init'`. It says `land.toml`
   exists and `AGENTS.md` already declares land, then `Nothing changed.`
@@ -67,7 +74,8 @@ Preconditions:
 - **An existing land.toml.** In a fresh run, run
   `drive.ts r do lander 'cp land.toml ../before.toml; echo "# Project" > CLAUDE.md && git add CLAUDE.md && git commit -qm guidance && land init && cmp land.toml ../before.toml && tail -3 CLAUDE.md'`.
   It says `land.toml` exists, adds the declaration to `CLAUDE.md`, and `cmp`
-  finds `land.toml` unchanged.
+  finds `land.toml` unchanged. Its Decide list says to add the `feed` key and
+  install the App.
 - **Proof.** The saved output of each `land init`, the file contents, the
   landing, and the second view of `main`.
 

@@ -5,6 +5,7 @@ export const Declaration = Schema.Struct({
   main: Schema.optionalKey(Schema.String), // the branch landings push to; "main" when absent
   gate: Schema.optionalKey(Schema.String), // a shell command; absent skips the stage
   record: Schema.optionalKey(Schema.String), // a shell command that land record runs
+  feed: Schema.optionalKey(Schema.String), // the feed that shows landings and hosts their recordings
 })
 export type Declaration = typeof Declaration.Type
 

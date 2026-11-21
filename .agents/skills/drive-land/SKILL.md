@@ -65,6 +65,10 @@ drive.ts r1 do origin.git 'git log --format="%h %s" main'
 drive.ts r1 clone other
 ```
 
+`drive.ts r1 feed lander land` is `do` while the world's stub feed answers at
+the address `up` printed, and its evidence lists the requests the feed got;
+see [Feed](features/feed.md). With `do`, the feed is down.
+
 `do <dir> '<command>'` runs one shell command in a directory of the world:
 `lander`, another clone, `origin.git`, or `home` for a place outside any
 repository. Put the whole command in one pair of quotes. It prints what the
@@ -100,7 +104,7 @@ drive.ts r1 down
 `down` removes the world and keeps the evidence. A run id is used once: a new
 world needs a new id, so one evidence folder never holds the output of two
 builds. A run starts no process that
-outlives its command, so there is nothing to stop. Check that the evidence
+outlives its command, the stub feed included, so there is nothing to stop. Check that the evidence
 folder is still there before you report.
 
 ## The feature map

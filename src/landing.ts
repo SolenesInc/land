@@ -5,8 +5,11 @@ import { Effect } from "effect"
 import { readDeclaration } from "./declaration.ts"
 import { LandFailed } from "./failure.ts"
 import { git, gitOk, gitWith, run, succeeds } from "./git.ts"
-import { deleteNote, findNote, type Note } from "./note.ts"
+import { deleteNote, findNote } from "./note.ts"
 import { excludeLandDir } from "./land-dir.ts"
+import { githubRepository, landingAddress } from "./feed.ts"
+import { listed, plural, readNoteMedia, uploadRecordings } from "./media.ts"
+import { drain } from "./outbox.ts"
 import type { LandingRecord } from "./schema.ts"
 import { version } from "../package.json"
 
@@ -202,10 +205,10 @@ const runGate = (gate: string, root: string, base: string, head: string) =>
 
 // The commit refs/landings/<head> names: landing.json and, when the lander wrote one, note.md.
 // It has no parent, so it shares no history with main and a clone never fetches it.
-const landingCommit = (record: LandingRecord, note: Note | undefined) =>
+const landingCommit = (record: LandingRecord, note: string | undefined) =>
   Effect.gen(function* () {
     const files = [{ name: "landing.json", text: `${JSON.stringify(record, null, 2)}\n` }]
-    if (note !== undefined) files.push({ name: "note.md", text: note.text })
+    if (note !== undefined) files.push({ name: "note.md", text: note })
     const entries: string[] = []
     for (const file of files) {
       const blob = yield* gitWith(file.text, "hash-object", "-w", "--stdin")
@@ -244,13 +247,23 @@ Commit, remove or ignore them, then run land again.`,
       })
     }
 
+    // D24: what earlier lands could not send goes first, in any repository.
+    const outbox = yield* drain
+    if (outbox.sent > 0) yield* say(`outbox ${outbox.sent} sent`)
+    if (outbox.waiting > 0) yield* say(`outbox ${outbox.waiting} wait to send: ${outbox.why}`)
+
+    const media = note === undefined ? undefined : yield* readNoteMedia(root, note, declaration.feed)
+
     yield* fetchMain(main)
     yield* refuseCommitsByAnotherAuthor(main)
     yield* rebaseOntoMain(main)
     if ((yield* gitOk("rev-list", "--count", `${landRef(main)}..HEAD`)) === "0") return yield* say("nothing to land")
     yield* installHooks(main)
 
-    if (note !== undefined) yield* say(`note   ${note.shown}`)
+    if (note !== undefined) {
+      const count = listed(media!.recordings).length
+      yield* say(`note   ${note.shown}${count === 0 ? "" : `, ${plural(count)}`}`)
+    }
     const checked = yield* gitOk("rev-parse", "HEAD")
     let gate: LandingRecord["gate"]
     if (declaration.gate !== undefined) {
@@ -274,9 +287,9 @@ Commit, remove or ignore them, then run land again.`,
         base: yield* gitOk("rev-parse", landRef(main)),
         head,
         ...(gate === undefined ? {} : { gate }),
-        recordings: [],
+        recordings: listed(media?.recordings ?? []),
       }
-      const landing = yield* landingCommit(record, note)
+      const landing = yield* landingCommit(record, media?.text)
       // One atomic push, so a landing ref never names a head that is not on main.
       // Push to the URL, not to the remote's name, so git writes no tracking ref that
       // another land of the clone may be writing. advanceTracking moves it forward.
@@ -286,8 +299,14 @@ Commit, remove or ignore them, then run land again.`,
       )
       if (pushed.status === 0) {
         yield* advanceTracking(main, head)
+        yield* say(`push   ${main} is at ${yield* short(head)}`)
+        if (media?.at !== undefined) yield* uploadRecordings(declaration.feed!, media.at, head, media.recordings)
         if (note !== undefined) yield* deleteNote(note)
-        return yield* say(`push   ${main} is at ${yield* short(head)}`)
+        if (declaration.feed !== undefined) {
+          const at = media?.at ?? (yield* githubRepository)
+          if (at !== undefined) yield* say(`feed   ${landingAddress(declaration.feed, at, head)}`)
+        }
+        return
       }
       const fetched = yield* fetchMain(main)
       if (yield* succeeds("merge-base", "--is-ancestor", fetched, "HEAD")) {

@@ -3,6 +3,7 @@
 import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { constants } from "node:os"
 import { join, resolve } from "node:path"
+import { stubFeed } from "../../../test/stub-feed.ts"
 
 const usage = `usage: drive.ts <run> <command>
 
@@ -12,6 +13,9 @@ const usage = `usage: drive.ts <run> <command>
   clone <name>          add another clone of origin to the world
   do <dir> '<command>'  run a shell command in <dir> of the world, print what it printed,
                         save it as evidence, and exit with its status
+  feed <dir> '<command>'
+                        do, while the world's stub feed answers at the address up printed;
+                        the evidence also lists the requests the feed got
   doctor                say whether the world is worth driving; ends with "ok"
   down                  remove the world and keep the evidence
 
@@ -30,6 +34,7 @@ const world = join(base, "world")
 const evidence = join(base, "evidence")
 const origin = join(world, "origin.git")
 const built = join(world, "built.json")
+const feedPort = join(world, "feed-port")
 const identity = "lander@example.com"
 
 // What every command in the world sees. The home and the git identity are the world's
@@ -116,10 +121,15 @@ const up = () => {
   must(lander, "git fetch --quiet origin && git switch --quiet -c work origin/main")
   const version = JSON.parse(readFileSync(join(checkout, "package.json"), "utf8")).version as string
   writeFileSync(built, JSON.stringify({ version, sources: sources() }) + "\n")
+  // The stub feed's address stays the same for the run, so a land.toml can name it.
+  const probe = stubFeed(origin)
+  probe.stop()
+  writeFileSync(feedPort, `${probe.port}\n`)
   console.log(`world:    ${world}`)
   console.log(`evidence: ${evidence}`)
   console.log(`lander:   on branch work at origin/main, with land.toml naming the gate "sh gate.sh"`)
   console.log(`land:     ${version}, built from ${checkout}`)
+  console.log(`feed:     ${probe.url}, answering only during drive.ts ${run} feed`)
 }
 
 const slug = (script: string) =>
@@ -129,21 +139,49 @@ const slug = (script: string) =>
     .replace(/^-|-$/g, "")
     .slice(0, 40)
 
-const drive = (dir: string | undefined, script: string | undefined, extra: number) => {
+const where = (verb: string, dir: string | undefined, script: string | undefined, extra: number) => {
   needWorld()
   if (dir === undefined || script === undefined || extra > 0) {
-    fail(`do takes a directory of the world and one shell command in quotes, such as: do lander 'land --help'`)
+    fail(
+      `${verb} takes a directory of the world and one shell command in quotes, such as: ${verb} lander 'land --help'`,
+    )
   }
   const cwd = join(world, dir)
   if (!existsSync(cwd)) fail(`${dir} is not in run ${run}; the world holds: ${readdirSync(world).join(" ")}`)
-  const ran = sh(cwd, script)
+  return cwd
+}
+
+const save = (dir: string, script: string, ran: Ran, also = "") => {
   const number = String(readdirSync(evidence).length + 1).padStart(2, "0")
   const file = join(evidence, `${number}-${slug(dir)}-${slug(script)}.txt`)
-  writeFileSync(file, `$ ${script}\ndir: ${dir}\nexit: ${ran.status}\n--- stdout\n${ran.out}--- stderr\n${ran.err}`)
+  writeFileSync(
+    file,
+    `$ ${script}\ndir: ${dir}\nexit: ${ran.status}\n--- stdout\n${ran.out}--- stderr\n${ran.err}${also}`,
+  )
   process.stdout.write(ran.out)
   process.stderr.write(ran.err)
   console.error(`drive: exit ${ran.status}, saved ${file}`)
   process.exit(ran.status)
+}
+
+const drive = (dir: string | undefined, script: string | undefined, extra: number) => {
+  const cwd = where("do", dir, script, extra)
+  save(dir!, script!, sh(cwd, script!))
+}
+
+// The command runs while this process serves the stub feed, so it is spawned without blocking.
+const driveWithFeed = async (dir: string | undefined, script: string | undefined, extra: number) => {
+  const cwd = where("feed", dir, script, extra)
+  const feed = stubFeed(origin, { port: Number(readFileSync(feedPort, "utf8")) })
+  const child = Bun.spawn(["sh", "-c", script!], { cwd, env: worldEnv(), stdout: "pipe", stderr: "pipe" })
+  const [out, err] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()])
+  await child.exited
+  feed.stop()
+  const status = child.exitCode ?? 128 + (constants.signals[child.signalCode as keyof typeof constants.signals] ?? 0)
+  const requests = feed.requests.map(
+    (r) => `${r.method} ${r.path}${r.credential === null ? "" : "  (with a credential)"}\n`,
+  )
+  save(dir!, script!, { status, out, err }, `--- feed requests\n${requests.join("")}`)
 }
 
 const doctor = () => {
@@ -207,6 +245,9 @@ switch (command) {
     break
   case "do":
     drive(rest[0], rest[1], rest.length - 2)
+    break
+  case "feed":
+    await driveWithFeed(rest[0], rest[1], rest.length - 2)
     break
   case "doctor":
     doctor()

@@ -13,11 +13,12 @@ was.
   and one for the push.
 - `land-ref` pushes `main` and `refs/landings/<head>` in one atomic push. The
   ref's commit holds `landing.json`: version 1, `land`'s version, the base,
-  the head, the gate's command, seconds and the commit it ran on, and an empty
-  `recordings` list.
+  the head, the gate's command, seconds and the commit it ran on, and the
+  `recordings` the note links, empty without one; see [Feed](feed.md).
 - `land-note` picks up `.land/note.md`, prints `land: note   .land/note.md`,
   puts it in the landing ref as `note.md`, and deletes it after the push. It
-  keeps the note when `land` pushes nothing.
+  keeps the note when `land` pushes nothing. A note that links recordings
+  prints `, 1 recording` after the path; see [Feed](feed.md).
 - `land-note-flag` takes the note from the file `land --note <file>` names,
   and fails with `land: --note <file>: no such file` before the gate when it
   is missing. A note git tracks is refused, because `land` deletes the note
