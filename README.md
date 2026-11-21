@@ -24,15 +24,16 @@ file after the push. A normal clone does not fetch landing refs; read one with
 
 `land` refuses to start while the worktree has uncommitted changes or untracked
 files that git does not ignore, because the gate runs in the worktree and must
-see only what lands. When the rebase conflicts, `land` aborts it, names the files, and leaves your
-branch as it was. When the gate fails, `land` pushes nothing and exits with the
-gate's status. When `main` moves while the gate runs, `land` rebases and pushes
-without running the gate again, and names the commit the gate ran on. Lands
-from several worktrees of one clone can run at once.
+see only what lands. When the rebase conflicts, `land` aborts it, names the
+files, and leaves your branch as it was. When the gate fails, `land` pushes
+nothing and exits with the gate's status. When `main` moves while the gate
+runs, `land` rebases and pushes without running the gate again, and names the
+commit the gate ran on. Lands from several worktrees of one clone can run at
+once.
 
 `land guide` prints the procedure around a landing: branch, commit, check,
-review, note, land and report. `land guide review` and `land guide sheriff` print the
-procedures that keep `main` healthy after a landing; see
+review, note, land and report. `land guide review` and `land guide sheriff`
+print the procedures that keep `main` healthy after a landing; see
 [Keep main healthy](#keep-main-healthy).
 
 ## Install
