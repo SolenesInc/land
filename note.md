@@ -1,0 +1,1 @@
+Adds post-landing review and bug-tracking commands (`land show`, `land comments`, `land review check`, `land brief`, `land bug`, `land bugs`, `land auth`), shared Effect 4.1 schemas, and the attn-compatible review document parser/validator.
