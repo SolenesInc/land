@@ -987,3 +987,132 @@ test("a feed that refuses the recording and the event, as one without the App do
   )
   expect(outbox(w)).toEqual([])
 })
+
+test("land bug registers a bug to a culprit commit (with optional --fixed-by) and land bugs queries it", async () => {
+  const w = world()
+  const feed = feedOf(w)
+  const lander = feedClone(w, feed.url)
+  const culprit = w.commit(lander, "story.txt", "buggy\n")
+  await w.land(lander)
+  const fix = w.commit(lander, "story.txt", "fixed\n")
+  await w.land(lander)
+
+  writeFileSync(join(w.dir, "bug.md"), "Repro: trigger concurrent refresh.\n")
+  const reg = await w.start(lander, "true", {}, [
+    "bug",
+    culprit.slice(0, 7),
+    "--title",
+    "refresh race",
+    "--severity",
+    "p0",
+    "--source",
+    "agent",
+    "--location",
+    "story.txt:1",
+    "--detail-file",
+    join(w.dir, "bug.md"),
+  ]).result
+  expect(reg.status).toBe(0)
+  expect(reg.out).toContain(`land: bug    refs/land-events/${culprit}/`)
+  expect(reg.out).toContain("pushed; the feed has it")
+
+  const listed = await w.start(lander, "true", {}, ["bugs", "--open", "--severity", "p0", "--path", "story.txt"]).result
+  expect(listed.status).toBe(0)
+  expect(listed.out).toContain(`P0  ${culprit.slice(0, 7)}  [open]  refresh race (story.txt:1)`)
+
+  const regWithFix = await w.start(lander, "true", {}, [
+    "bug",
+    culprit.slice(0, 7),
+    "--title",
+    "second bug",
+    "--fixed-by",
+    fix.slice(0, 7),
+  ]).result
+  expect(regWithFix.status).toBe(0)
+  expect(regWithFix.out).toContain("land: bug")
+  expect(regWithFix.out).toContain("land: repair")
+
+  const openAfterFix = await w.start(lander, "true", {}, ["bugs", "--open", "--json"]).result
+  expect(openAfterFix.status).toBe(0)
+  expect(JSON.parse(openAfterFix.out)).toEqual([])
+  feed.stop()
+})
+
+test("land auth, show, comments, review check and brief work end-to-end against the feed", async () => {
+  const w = world()
+  const commentsSeed = [
+    {
+      id: "c-1",
+      owner: "SolenesInc",
+      name: "demo",
+      head: "",
+      author: "victor",
+      path: "story.txt",
+      side: "additions" as const,
+      lineStart: 1,
+      lineEnd: 1,
+      kind: "concern" as const,
+      body: "Handle empty input here.",
+      status: "open" as const,
+      resolvedBy: null,
+      resolvedAt: null,
+      resolvedBySha: null,
+      createdAt: 1700000000000,
+      updatedAt: 1700000000000,
+    },
+  ]
+  const feed = stubFeed(join(w.dir, "origin.git"), { requireToken: "secret-tok", comments: commentsSeed })
+  const lander = feedClone(w, feed.url)
+  const head = w.commit(lander, "story.txt", "line one\nline two\n")
+  await w.land(lander)
+  feed.comments[0] = { ...feed.comments[0]!, head }
+
+  // Without token, private feed answers 404.
+  const denied = await w.start(lander, "true", {}, ["show", head.slice(0, 7)]).result
+  expect(denied.status).toBe(1)
+  expect(denied.err).toContain("land auth token")
+
+  // Save token via land auth token
+  const authed = await w.start(lander, "true", {}, ["auth", "token", "secret-tok"]).result
+  expect(authed.status).toBe(0)
+  const status = await w.start(lander, "true", {}, ["auth", "status"]).result
+  expect(status.out).toContain("token saved")
+
+  // land show by sha and by full URL
+  const shown = await w.start(lander, "true", {}, ["show", head.slice(0, 7)]).result
+  expect(shown.status).toBe(0)
+  expect(shown.out).toContain("Handle empty input here.")
+  const shownByUrl = await w.start(lander, "true", {}, ["show", `${feed.url}/SolenesInc/demo/${head.slice(0, 7)}`])
+    .result
+  expect(shownByUrl.status).toBe(0)
+  expect(shownByUrl.out).toContain("Handle empty input here.")
+
+  // land comments & resolve
+  const list = await w.start(lander, "true", {}, ["comments", "--open"]).result
+  expect(list.status).toBe(0)
+  expect(list.out).toContain("[open] c-1")
+  const resolved = await w.start(lander, "true", {}, ["comments", "resolve", "c-1", "--by", head.slice(0, 7)]).result
+  expect(resolved.status).toBe(0)
+  expect(resolved.out).toContain(`resolved (by ${head.slice(0, 7)})`)
+  const after = await w.start(lander, "true", {}, ["comments", "--open"]).result
+  expect(after.out).toContain("No open comments.")
+
+  // land review check & land brief
+  const docPath = join(w.dir, "review.md")
+  writeFileSync(
+    docPath,
+    `---\nland: review\nframe: walkthrough\n---\n\n# Story update\n\nAdds a second line.\n\n## Update story\n\n### story.txt:1-2\n\n- L2!: New second line.\n`,
+  )
+  const checked = await w.start(lander, "true", {}, ["review", "check", docPath, "--head", head]).result
+  expect(checked.status).toBe(0)
+  expect(checked.out).toContain("land: review ok  frame=walkthrough  1 stop, 1 files covered")
+
+  const briefed = await w.start(lander, "true", {}, ["brief", head.slice(0, 7), docPath]).result
+  expect(briefed.status).toBe(0)
+  expect(briefed.out).toContain(`land: brief  refs/land-events/${head}/`)
+  expect(briefed.out).toContain("pushed; the feed has it")
+
+  const logout = await w.start(lander, "true", {}, ["auth", "logout"]).result
+  expect(logout.status).toBe(0)
+  feed.stop()
+})

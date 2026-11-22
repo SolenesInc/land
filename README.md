@@ -176,6 +176,16 @@ which reads the ref before it stores the event. `--state` is `pass`, `fail`,
 `run` or `info`; `--url`, `--detail-file` (markdown) and `--repairs <sha>`
 are optional. A notice the feed does not take waits in the outbox.
 
+### Post-landing review and bug tracking
+
+`land` pairs with `land-feed` for post-landing human review and bug attribution:
+
+- `land auth token <token>` saves a feed API token (or set `LAND_FEED_TOKEN`) for reading private repositories.
+- `land show <sha|url>` prints the LLM-ready markdown bundle (note, open review comments with diff context, and registered bugs) for a landing.
+- `land comments [<sha|url>] [--open]` lists open human review comments; `land comments resolve <id> [--by <sha>]` marks one resolved.
+- `land review check <file>` validates a review document (`brief` / `walkthrough` / `map` frames, stops, line ranges, diagrams, and file coverage) against git; `land brief <sha> <file>` validates and pushes it to `refs/land-events/`.
+- `land bug <culprit-sha> --title "<summary>" [--severity p0|p1|p2] [--source agent|review|ci|prod|human] [--location path:line] [--fixed-by <sha>]` attributes a bug to the commit that introduced it; `land bugs [--open] [--since 30d] [--path <prefix>]` queries registered bugs for retrospective analysis.
+
 ## Keep main healthy
 
 A landing passes the gate, but CI on `main` runs the whole check and can still

@@ -167,3 +167,10 @@ the same way you landed it. Start a new branch from `origin/main`, make the
 fix, check it and land it with `land`. To land reverted work again, run
 `git revert <revert sha>` on that branch first, then fix the problem. Report
 the fix to whoever told you.
+
+When a human leaves post-landing review comments on the feed, read them with
+`land show <sha-or-url>` or `land comments --open`, address them on a new branch,
+land the fix, and mark comments resolved with `land comments resolve <id> --by <fix-sha>`.
+When you discover a bug introduced by an earlier commit `<culprit>`, register it
+with `land bug <culprit> --title "<summary>" --severity p0|p1|p2 [--location path:line] [--fixed-by <fix-sha>]`
+so humans and future agents can trace regressions over time.

@@ -1,12 +1,15 @@
 import { Cause, Effect, Exit } from "effect"
+import { auth } from "./auth.ts"
+import { bug, bugs } from "./bug.ts"
+import { event } from "./event.ts"
 import type { LandFailed } from "./failure.ts"
 import guide from "./guide.md" with { type: "text" }
 import reviewGuide from "./guide-review.md" with { type: "text" }
 import sheriffGuide from "./guide-sheriff.md" with { type: "text" }
-import { event } from "./event.ts"
 import { init } from "./init.ts"
 import { land } from "./landing.ts"
 import { record } from "./record.ts"
+import { brief, comments, review, show } from "./review.ts"
 import { version } from "../package.json"
 
 const help = `land lands finished commits on main: it rebases onto origin/main, runs the
@@ -21,6 +24,22 @@ Usage:
   land event <sha> --kind <kind> --state pass|fail|run|info --title <title>
              [--url <url>] [--detail-file <file>] [--repairs <sha>]
                        push an event about the landing <sha> to refs/land-events/, and tell the feed
+  land bug <sha> --title <title> [--severity p0|p1|p2] [--source agent|review|ci|prod|human]
+           [--location <path[:line]>] [--detail-file <file>] [--fixed-by <sha>] [--url <url>]
+                       register a bug attributed to commit <sha>
+  land bugs [--open] [--since <Nd|ISO>] [--path <prefix>] [--severity p0|p1|p2] [--json]
+                       list bugs registered for this repository on the feed
+  land show <sha|url>  fetch the LLM-ready markdown review bundle (note, comments, bugs) from the feed
+  land comments [<sha|url>] [--open] [--json]
+                       list human review comments for a landing or the repository
+  land comments resolve <id> [--by <sha>]
+                       mark a review comment resolved
+  land review check <file> [--base <sha>] [--head <sha>]
+                       validate a review document (stops, line ranges, diagrams, file coverage)
+  land brief <sha> <file> [--no-check]
+                       validate and push a review document to refs/land-events/ for the feed
+  land auth token <token|-> | status | logout
+                       manage the land-feed API token (~/.config/land/token or LAND_FEED_TOKEN)
   land guide           print the procedure for landing a change
   land guide review    print the procedure for reviewing what landed on main
   land guide sheriff   print the procedure for getting main's CI green
@@ -57,6 +76,13 @@ const report = async (command: Effect.Effect<void, LandFailed>) => {
 const main = async (args: ReadonlyArray<string>) => {
   if (args[0] === "record") return report(record(args.slice(1)))
   if (args[0] === "event") return report(event(args.slice(1)))
+  if (args[0] === "bug") return report(bug(args.slice(1)))
+  if (args[0] === "bugs") return report(bugs(args.slice(1)))
+  if (args[0] === "show") return report(show(args.slice(1)))
+  if (args[0] === "comments") return report(comments(args.slice(1)))
+  if (args[0] === "review") return report(review(args.slice(1)))
+  if (args[0] === "brief") return report(brief(args.slice(1)))
+  if (args[0] === "auth") return report(auth(args.slice(1)))
   if (args.length === 2 && args[0] === "--note") return report(land({ note: args[1] }))
   switch (args.join(" ")) {
     case "":

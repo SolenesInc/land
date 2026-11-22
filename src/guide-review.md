@@ -116,6 +116,11 @@ fix's commit on GitHub. Leave out `--url` when the finding went in a message.
 land event <sha> --kind finding --state fail --title "P1: <title>" --url <route> --detail-file <file>
 ```
 
+For confirmed bugs attributed to an earlier commit, register them with
+`land bug <sha> --title "<title>" --severity p0|p1 --source review [--location path:line] --detail-file <file>`.
+When you also write a review document for a landing (using the `brief` / `walkthrough` / `map` grammar),
+validate it with `land review check <file>` and push it with `land brief <sha> <file>`.
+
 Posting is best effort. When `land event` fails or the feed refuses the
 notice, note it in the record of the pass and go on. The record and the issues
 stay the record of the pass, not the feed.

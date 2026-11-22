@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises"
 import { Effect, Schema } from "effect"
 import { readDeclaration } from "./declaration.ts"
 import { LandFailed } from "./failure.ts"
-import { githubRepository, notify, originUrl, type Failure } from "./feed.ts"
+import { githubRepository, notify, originUrl, type Failure, type Repository } from "./feed.ts"
 import { git, gitOk, gitWith, run } from "./git.ts"
 import { keepEvent } from "./outbox.ts"
 import { Event } from "./schema.ts"
@@ -34,30 +34,87 @@ const parse = (args: ReadonlyArray<string>) =>
     return { sha, given }
   })
 
+export const feedContext = Effect.gen(function* () {
+  const root = yield* gitOk("rev-parse", "--show-toplevel")
+  const { feed } = yield* readDeclaration(root)
+  if (feed === undefined) {
+    return yield* new LandFailed({
+      message: `land.toml names no feed to send the event to; add\n  feed = "https://land-feed.caketroll.cloud"`,
+    })
+  }
+  const at = yield* githubRepository
+  if (at === undefined) {
+    return yield* new LandFailed({
+      message: `the feed takes events of GitHub repositories only; origin is ${yield* originUrl}`,
+    })
+  }
+  return { root, feed, at }
+})
+
+export const resolveCommitSha = (sha: string, label = "event") =>
+  Effect.gen(function* () {
+    // A runner may not hold the landing, so a full sha needs no lookup.
+    const resolved = /^[0-9a-f]{40}$/.test(sha)
+      ? sha
+      : (yield* git("rev-parse", "--verify", "--quiet", `${sha}^{commit}`)).out
+    if (resolved === "")
+      return yield* new LandFailed({ message: `${label}: no commit ${sha}; name the landing by its full sha` })
+    return resolved
+  })
+
+export const pushEvent = (opts: {
+  readonly feed: string
+  readonly at: Repository
+  readonly landing: string
+  readonly body: Event
+  readonly label?: string
+}) =>
+  Effect.gen(function* () {
+    const label = opts.label ?? "event"
+    const blob = yield* gitWith(`${JSON.stringify(opts.body, null, 2)}\n`, "hash-object", "-w", "--stdin")
+    const tree = yield* gitWith(`100644 blob ${blob}\tevent.json\n`, "mktree")
+    // Dated by the event, so the same event makes the same commit.
+    const made = yield* run(["git", "commit-tree", tree, "-m", `Event ${opts.body.kind} for ${opts.landing}`], {
+      GIT_AUTHOR_DATE: opts.body.at,
+      GIT_COMMITTER_DATE: opts.body.at,
+    })
+    if (made.status !== 0) return yield* new LandFailed({ message: `git commit-tree: ${made.err}` })
+    const id = made.out
+    const ref = `refs/land-events/${opts.landing}/${id}`
+    const url = yield* gitOk("remote", "get-url", "--push", "origin")
+    const pushed = yield* git("push", "--quiet", url, `${id}:${ref}`)
+    if (pushed.status !== 0) return yield* new LandFailed({ message: `git push ${ref} failed:\n${pushed.err}` })
+
+    const failure = yield* notify({ feed: opts.feed, at: opts.at, sha: opts.landing, id }).pipe(
+      Effect.as(undefined),
+      Effect.catch((failure: Failure) => Effect.succeed(failure)),
+    )
+    const pad = label.padEnd(6, " ")
+    if (failure === undefined) {
+      console.log(`land: ${pad} ${ref} pushed; the feed has it`)
+      return { id, ref }
+    }
+    if (failure.kind === "refused") {
+      console.log(
+        `land: ${pad} ${ref} pushed; the feed refused the notice: ${failure.why}; is the Attn Land App installed on ${opts.at.owner}/${opts.at.repo}?`,
+      )
+      return { id, ref }
+    }
+    const kept = yield* keepEvent({ feed: opts.feed, at: opts.at, sha: opts.landing, id }).pipe(
+      Effect.as(`the notice waits in the outbox: ${failure.why}`),
+      Effect.catch((why: string) => Effect.succeed(`the notice is not sent: ${failure.why}, and ${why}`)),
+    )
+    console.log(`land: ${pad} ${ref} pushed; ${kept}`)
+    return { id, ref }
+  })
+
 // D27: an event is a commit with no parent whose tree holds event.json. land pushes it to
 // refs/land-events/<landing sha>/<event commit sha>, then tells the feed, which reads the ref.
 export const event = (args: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const { sha, given } = yield* parse(args)
-    const root = yield* gitOk("rev-parse", "--show-toplevel")
-    const { feed } = yield* readDeclaration(root)
-    if (feed === undefined) {
-      return yield* new LandFailed({
-        message: `land.toml names no feed to send the event to; add\n  feed = "https://land-feed.caketroll.cloud"`,
-      })
-    }
-    const at = yield* githubRepository
-    if (at === undefined) {
-      return yield* new LandFailed({
-        message: `the feed takes events of GitHub repositories only; origin is ${yield* originUrl}`,
-      })
-    }
-    // A runner may not hold the landing, so a full sha needs no lookup.
-    const landing = /^[0-9a-f]{40}$/.test(sha)
-      ? sha
-      : (yield* git("rev-parse", "--verify", "--quiet", `${sha}^{commit}`)).out
-    if (landing === "")
-      return yield* new LandFailed({ message: `event: no commit ${sha}; name the landing by its full sha` })
+    const { feed, at } = yield* feedContext
+    const landing = yield* resolveCommitSha(sha, "event")
 
     const detail =
       given["detail-file"] === undefined
@@ -77,33 +134,5 @@ export const event = (args: ReadonlyArray<string>) =>
       ...(given.repairs === undefined ? {} : { repairs: given.repairs }),
     }).pipe(Effect.mapError((error) => new LandFailed({ message: `event: ${error.message}`, status: 2 })))
 
-    const blob = yield* gitWith(`${JSON.stringify(body, null, 2)}\n`, "hash-object", "-w", "--stdin")
-    const tree = yield* gitWith(`100644 blob ${blob}\tevent.json\n`, "mktree")
-    // Dated by the event, so the same event makes the same commit.
-    const made = yield* run(["git", "commit-tree", tree, "-m", `Event ${body.kind} for ${landing}`], {
-      GIT_AUTHOR_DATE: now,
-      GIT_COMMITTER_DATE: now,
-    })
-    if (made.status !== 0) return yield* new LandFailed({ message: `git commit-tree: ${made.err}` })
-    const id = made.out
-    const ref = `refs/land-events/${landing}/${id}`
-    const url = yield* gitOk("remote", "get-url", "--push", "origin")
-    const pushed = yield* git("push", "--quiet", url, `${id}:${ref}`)
-    if (pushed.status !== 0) return yield* new LandFailed({ message: `git push ${ref} failed:\n${pushed.err}` })
-
-    const failure = yield* notify({ feed, at, sha: landing, id }).pipe(
-      Effect.as(undefined),
-      Effect.catch((failure: Failure) => Effect.succeed(failure)),
-    )
-    if (failure === undefined) return console.log(`land: event  ${ref} pushed; the feed has it`)
-    if (failure.kind === "refused") {
-      return console.log(
-        `land: event  ${ref} pushed; the feed refused the notice: ${failure.why}; is the Attn Land App installed on ${at.owner}/${at.repo}?`,
-      )
-    }
-    const kept = yield* keepEvent({ feed, at, sha: landing, id }).pipe(
-      Effect.as(`the notice waits in the outbox: ${failure.why}`),
-      Effect.catch((why: string) => Effect.succeed(`the notice is not sent: ${failure.why}, and ${why}`)),
-    )
-    console.log(`land: event  ${ref} pushed; ${kept}`)
+    yield* pushEvent({ feed, at, landing, body, label: "event" })
   })
