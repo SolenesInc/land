@@ -11,7 +11,7 @@ export const showUsage = `land show <sha | feed-url>`
 export const commentsUsage = `land comments [<sha | feed-url>] [--open] [--json]
 land comments resolve <id> [--by <sha>]`
 export const reviewUsage = `land review check <file> [--base <sha>] [--head <sha>]`
-export const briefUsage = `land brief <sha> <file> [--no-check]`
+export const briefUsage = `land brief <sha> <file> [--base <sha>] [--no-check]`
 
 const feedLandingUrl =
   /^(https?:\/\/[^/]+)\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/([0-9a-f]{7,40})(?:\.md)?(?:[?#].*)?$/
@@ -233,8 +233,11 @@ export const brief = (args: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const [sha, file, ...rest] = args
     let noCheck = false
-    for (const arg of rest) {
+    let baseArg: string | undefined
+    for (let i = 0; i < rest.length; i++) {
+      const arg = rest[i]!
       if (arg === "--no-check") noCheck = true
+      else if (arg === "--base" && rest[i + 1]) baseArg = rest[++i]
       else return yield* new LandFailed({ message: `brief: unexpected ${arg}\nUsage: ${briefUsage}`, status: 2 })
     }
     if (!sha || sha.startsWith("--") || !file || file.startsWith("--")) {
@@ -252,9 +255,15 @@ export const brief = (args: ReadonlyArray<string>) =>
 
     let title = "Review brief"
     if (!noCheck) {
-      const parent = yield* git("rev-parse", "--verify", "--quiet", `${landing}~1^{commit}`)
-      if (parent.status === 0 && parent.out) {
-        const bundle = yield* validateFileAgainstGit(text, parent.out, landing)
+      const meta = parseFrontmatter(splitLines(text))
+      const metaBase = metaGet(meta, "base")?.value
+      const baseRef = baseArg ?? metaBase
+      const resolvedBase =
+        baseRef !== undefined
+          ? yield* resolveCommitSha(baseRef, "brief")
+          : (yield* git("rev-parse", "--verify", "--quiet", `${landing}~1^{commit}`)).out
+      if (resolvedBase) {
+        const bundle = yield* validateFileAgainstGit(text, resolvedBase, landing)
         if (bundle.title) title = bundle.title
         if (bundle.problems.length > 0) {
           for (const p of bundle.problems) console.error(`${file}:${p.line}: ${p.message}`)

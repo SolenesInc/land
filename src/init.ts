@@ -138,7 +138,7 @@ export const init = Effect.gen(function* () {
   }
 
   // Install the hooks now, so commits made before the first land carry attn trailers too.
-  const installed = yield* installHooks(main)
+  const installed = yield* installHooks(main, root)
   if (installed.length > 0) say("hooks", `installed ${installed.join(" and ")}`)
 
   if (decide.length > 0) {

@@ -10,6 +10,9 @@ branch other than `main` to land on.
   pushes only when it exits 0.
 - `decl-no-gate` lands with no check when the file names no gate.
 - `decl-main` lands on the branch that `main` names.
+- `decl-resolve` runs the `resolve` command with `sh -c` at the repository
+  root (with `LAND_BASE` set) when rebasing hits conflicts, continuing the
+  rebase when it exits 0 and leaves no unmerged files.
 - `decl-record` names the `record` command that `land record` runs; see
   [Record](record.md).
 - `decl-feed` names the feed that shows landings and hosts their recordings;

@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs"
-import { mkdir, writeFile } from "node:fs/promises"
-import { constants } from "node:os"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { constants, tmpdir } from "node:os"
+import { isAbsolute, join } from "node:path"
 import { Effect } from "effect"
 import { readDeclaration } from "./declaration.ts"
 import { LandFailed } from "./failure.ts"
@@ -14,6 +15,9 @@ import type { LandingRecord } from "./schema.ts"
 import { version } from "../package.json"
 
 const maxAttempts = 5
+const maxResolveSteps = 100
+// Over 400 landings on attn, checking the last 30 main commits took ~0.1s per landing.
+const undoWindow = 30
 
 const say = (line: string) => Effect.sync(() => console.log(`land: ${line}`))
 const warn = (line: string) => Effect.sync(() => console.error(`land: ${line}`))
@@ -69,11 +73,33 @@ See which config set the identity with git config --show-origin user.email. If i
     })
   })
 
-const rebaseOntoMain = (main: string) =>
+const runResolve = (resolve: string, root: string, base: string) =>
+  Effect.promise(async () => {
+    const child = Bun.spawn(["sh", "-c", resolve], {
+      cwd: root,
+      stdio: ["inherit", "inherit", "inherit"],
+      env: { ...process.env, LAND_BASE: base },
+    })
+    await child.exited
+    return child.exitCode
+  })
+
+const rebaseOntoMain = (main: string, root: string, resolve?: string) =>
   Effect.gen(function* () {
     yield* git("rebase", "--quiet", landRef(main))
-    if (yield* rebasing) {
+    const base = yield* gitOk("rev-parse", landRef(main))
+    let steps = 0
+    while (yield* rebasing) {
       const conflicted = yield* gitOk("diff", "--name-only", "--diff-filter=U")
+      if (resolve !== undefined && conflicted !== "" && steps < maxResolveSteps) {
+        steps += 1
+        const status = yield* runResolve(resolve, root, base)
+        if (status === 0 && (yield* gitOk("diff", "--name-only", "--diff-filter=U")) === "") {
+          yield* say(`resolve ${resolve}   ok`)
+          yield* run(["git", "rebase", "--continue"], { GIT_EDITOR: "true" })
+          continue
+        }
+      }
       yield* gitOk("rebase", "--abort")
       if (conflicted === "") {
         return yield* new LandFailed({
@@ -133,20 +159,46 @@ git interpret-trailers --in-place --if-exists addIfDifferent "$@" "$message"
 exit 0
 `
 
-// Each hook land installs, and what a clone goes without when land cannot install it.
+// Each hook land installs, how land recognizes a repo-owned equivalent, and what a clone goes
+// without when land cannot install it.
 const hooks = (main: string) => [
-  { name: "pre-push", text: prePush(main), without: `plain pushes to ${main} are not refused` },
-  { name: "prepare-commit-msg", text: trailerHook, without: "land adds no attn trailers to commits" },
+  {
+    name: "pre-push",
+    text: prePush(main),
+    handled: (text: string) => text.includes(hookMark) || text.includes("LAND_LANDING"),
+    without: `plain pushes to ${main} are not refused`,
+  },
+  {
+    name: "prepare-commit-msg",
+    text: trailerHook,
+    handled: (text: string) => text.includes(hookMark) || text.includes("Attn-Session:"),
+    without: "land adds no attn trailers to commits",
+  },
 ]
+
+const hookHandledAt = (path: string, handled: (text: string) => boolean) =>
+  Effect.promise(async () => {
+    const file = Bun.file(path)
+    if (!(await file.exists())) return false
+    return handled(await file.text())
+  })
 
 // Install land's hooks in the clone's shared hooks folder, so every worktree has them.
 // Returns the names of the hooks this call installed.
-export const installHooks = (main: string) =>
+export const installHooks = (main: string, root: string) =>
   Effect.gen(function* () {
     const installed: string[] = []
     const all = hooks(main)
-    if ((yield* git("config", "--get", "core.hooksPath")).status === 0) {
-      yield* warn(`core.hooksPath is set, so land installs no hooks: ${all.map((hook) => hook.without).join(", and ")}`)
+    const configured = yield* git("config", "--path", "--get", "core.hooksPath")
+    if (configured.status === 0) {
+      const hooksDir = isAbsolute(configured.out) ? configured.out : join(root, configured.out)
+      const missing: string[] = []
+      for (const hook of all) {
+        if (!(yield* hookHandledAt(join(hooksDir, hook.name), hook.handled))) missing.push(hook.without)
+      }
+      if (missing.length > 0) {
+        yield* warn(`core.hooksPath is set, so land installs no hooks: ${missing.join(", and ")}`)
+      }
       return installed
     }
     const commonDir = yield* gitOk("rev-parse", "--path-format=absolute", "--git-common-dir")
@@ -156,7 +208,7 @@ export const installHooks = (main: string) =>
       const existing = Bun.file(path)
       if (yield* Effect.promise(() => existing.exists())) {
         const text = yield* Effect.promise(() => existing.text())
-        if (!text.includes(hookMark)) yield* warn(`${path} is not land's hook, so ${hook.without}`)
+        if (!hook.handled(text)) yield* warn(`${path} is not land's hook, so ${hook.without}`)
         continue
       }
       // Exclusive create: when two lands race, the second finds the first's hook.
@@ -173,6 +225,78 @@ export const installHooks = (main: string) =>
     }
     return installed
   })
+
+const rawGit = async (root: string, args: ReadonlyArray<string>, env?: Record<string, string>, input?: Uint8Array) => {
+  const child = Bun.spawn(["git", ...args], {
+    cwd: root,
+    stdin: input === undefined ? "ignore" : input,
+    stdout: "pipe",
+    stderr: "pipe",
+    env: env === undefined ? process.env : { ...process.env, ...env },
+  })
+  const [buf, status] = await Promise.all([new Response(child.stdout).arrayBuffer(), child.exited])
+  return { status, out: new Uint8Array(buf) }
+}
+
+const patchAppliesOn = async (root: string, patch: Uint8Array, tree: string, index: string) => {
+  const env = { GIT_INDEX_FILE: index }
+  const read = await rawGit(root, ["read-tree", tree], env)
+  if (read.status !== 0) return false
+  const apply = await rawGit(root, ["apply", "--cached", "--check"], env, patch)
+  return apply.status === 0
+}
+
+// Warn after a push when the landing completely undoes an earlier commit in the recent window.
+const warnUndoneCommits = (root: string, main: string, base: string, head: string) =>
+  Effect.gen(function* () {
+    const changed = new Set((yield* gitOk("diff", "--name-only", base, head)).split("\n").filter(Boolean))
+    if (changed.size === 0) return
+    const log = yield* gitOk(
+      "log",
+      "--first-parent",
+      "--no-merges",
+      `-${undoWindow}`,
+      "--name-only",
+      "--format=%x1e%H%x00%h%x00%s",
+      base,
+    )
+    const candidates: Array<{ sha: string; short: string; subject: string }> = []
+    for (const chunk of log.split("\x1e")) {
+      if (!chunk) continue
+      const lines = chunk.split("\n")
+      const header = lines[0]?.split("\x00")
+      if (!header || header.length < 3) continue
+      const files = lines.slice(1).filter(Boolean)
+      if (files.some((f) => changed.has(f))) {
+        candidates.push({ sha: header[0]!, short: header[1]!, subject: header[2]! })
+      }
+    }
+    if (candidates.length === 0) return
+    const undone = yield* Effect.promise(async () => {
+      const dir = await mkdtemp(join(tmpdir(), "land-undo-"))
+      const index = join(dir, "index")
+      const matched: string[] = []
+      try {
+        for (const c of candidates) {
+          const shown = await rawGit(root, ["show", "--format=", "--binary", c.sha])
+          if (shown.status !== 0 || shown.out.byteLength === 0) continue
+          if (
+            (await patchAppliesOn(root, shown.out, head, index)) &&
+            !(await patchAppliesOn(root, shown.out, base, index))
+          ) {
+            matched.push(`  ${c.short} ${c.subject}`)
+          }
+        }
+      } finally {
+        await rm(dir, { recursive: true, force: true })
+      }
+      return matched
+    })
+    if (undone.length === 0) return
+    yield* warn(
+      `WARNING: this landing undoes earlier commits on ${main}. Their whole change is gone from what landed:\n${undone.join("\n")}\nland: if that was not on purpose, restore each one in a new landing with git cherry-pick.`,
+    )
+  }).pipe(Effect.catch(() => Effect.void))
 
 const duration = (ms: number) => {
   const seconds = Math.round(ms / 1000)
@@ -256,9 +380,9 @@ Commit, remove or ignore them, then run land again.`,
 
     yield* fetchMain(main)
     yield* refuseCommitsByAnotherAuthor(main)
-    yield* rebaseOntoMain(main)
+    yield* rebaseOntoMain(main, root, declaration.resolve)
     if ((yield* gitOk("rev-list", "--count", `${landRef(main)}..HEAD`)) === "0") return yield* say("nothing to land")
-    yield* installHooks(main)
+    yield* installHooks(main, root)
 
     if (note !== undefined) {
       const count = media!.recordings.length
@@ -275,7 +399,7 @@ Commit, remove or ignore them, then run land again.`,
     let told = false
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       yield* fetchMain(main)
-      yield* rebaseOntoMain(main)
+      yield* rebaseOntoMain(main, root, declaration.resolve)
       const head = yield* gitOk("rev-parse", "HEAD")
       if (!told && declaration.gate !== undefined && head !== checked) {
         told = true
@@ -306,6 +430,7 @@ Commit, remove or ignore them, then run land again.`,
           const at = media?.at ?? (yield* githubRepository)
           if (at !== undefined) yield* say(`feed   ${landingAddress(declaration.feed, at, head)}`)
         }
+        yield* warnUndoneCommits(root, main, record.base, head)
         return
       }
       const fetched = yield* fetchMain(main)

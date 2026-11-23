@@ -1116,3 +1116,144 @@ test("land auth, show, comments, review check and brief work end-to-end against 
   expect(logout.status).toBe(0)
   feed.stop()
 })
+
+test("resolve in land.toml resolves generated-file rebase conflicts and aborts on real conflicts", async () => {
+  const w = world()
+  const lander = w.clone("lander")
+  const other = w.clone("other")
+
+  // A resolver that regenerates generated.txt when it is the only conflicted file, and refuses any other file.
+  writeFileSync(join(lander, "land.toml"), `gate = 'eval "$TEST_GATE"'\nresolve = "sh resolve.sh"\n`)
+  writeFileSync(
+    join(lander, "resolve.sh"),
+    `#!/bin/sh
+set -eu
+for f in $(git diff --name-only --diff-filter=U); do
+  [ "$f" = "generated.txt" ] || exit 1
+done
+printf 'regenerated\n' > generated.txt
+git add generated.txt
+`,
+  )
+  writeFileSync(join(lander, "generated.txt"), "base\n")
+  w.git(lander, "add", ".")
+  w.git(lander, "commit", "--quiet", "-m", "Add resolve script")
+  expect((await w.land(lander)).status).toBe(0)
+
+  // Both clones change generated.txt; other pushes first, lander auto-resolves on rebase.
+  w.git(other, "pull", "--quiet", "origin", "main")
+  w.commit(other, "generated.txt", "theirs\n")
+  w.git(other, "push", "--quiet", "origin", "HEAD:main")
+  w.commit(lander, "generated.txt", "ours\n")
+
+  const resolved = await w.land(lander)
+  expect(resolved.status).toBe(0)
+  expect(resolved.out).toContain("land: resolve sh resolve.sh   ok\n")
+  expect(readFileSync(join(lander, "generated.txt"), "utf8")).toBe("regenerated\n")
+  expect(w.git(lander, "show", `${w.main()}:generated.txt`)).toBe("regenerated")
+
+  // Real conflict in story.txt: resolve exits 1, land aborts cleanly and reports story.txt.
+  w.git(other, "pull", "--quiet", "origin", "main")
+  w.commit(other, "story.txt", "theirs\n")
+  w.git(other, "push", "--quiet", "origin", "HEAD:main")
+  const before = w.main()
+  const head = w.commit(lander, "story.txt", "ours\n")
+
+  const conflicted = await w.land(lander)
+  expect(conflicted.status).toBe(1)
+  expect(conflicted.err).toContain("land: rebasing onto origin/main conflicts in:\n  story.txt\n")
+  expect(w.git(lander, "rev-parse", "HEAD")).toBe(head)
+  expect(w.main()).toBe(before)
+})
+
+test("core.hooksPath warns only for hooks the repository does not already handle", async () => {
+  const w = world()
+  const lander = w.clone("lander")
+  const hooksDir = join(lander, ".githooks")
+  mkdirSync(hooksDir)
+  w.git(lander, "config", "core.hooksPath", ".githooks")
+
+  // Empty hooks dir: warns about both hooks.
+  w.commit(lander, "story.txt", "two\n")
+  const neither = await w.land(lander)
+  expect(neither.status).toBe(0)
+  expect(neither.err).toContain(
+    "land: core.hooksPath is set, so land installs no hooks: plain pushes to main are not refused, and land adds no attn trailers to commits",
+  )
+
+  // Only prepare-commit-msg handled: warns only about pre-push.
+  writeFileSync(join(hooksDir, "prepare-commit-msg"), "#!/bin/sh\n# Attn-Session:\nexit 0\n", { mode: 0o755 })
+  w.commit(lander, ".githooks/prepare-commit-msg", "#!/bin/sh\n# Attn-Session:\nexit 0\n")
+  const onlyTrailers = await w.land(lander)
+  expect(onlyTrailers.status).toBe(0)
+  expect(onlyTrailers.err).toBe(
+    "land: core.hooksPath is set, so land installs no hooks: plain pushes to main are not refused\n",
+  )
+
+  // Both handled: silent!
+  writeFileSync(join(hooksDir, "pre-push"), '#!/bin/sh\n[ "$LAND_LANDING" = 1 ] && exit 0\nexit 1\n', { mode: 0o755 })
+  w.commit(lander, ".githooks/pre-push", '#!/bin/sh\n[ "$LAND_LANDING" = 1 ] && exit 0\nexit 1\n')
+  const both = await w.land(lander)
+  expect(both).toMatchObject({ status: 0, err: "" })
+})
+
+test("land warns after pushing when a landing undoes an earlier commit on main", async () => {
+  const w = world()
+  const lander = w.clone("lander")
+
+  const added = w.commit(lander, "kept.txt", "kept\n")
+  const first = await w.land(lander)
+  expect(first).toMatchObject({ status: 0, err: "" })
+
+  // Deleting kept.txt undoes the commit that added it.
+  w.git(lander, "rm", "--quiet", "kept.txt")
+  w.git(lander, "commit", "--quiet", "-m", "Drop kept.txt")
+  const dropped = await w.land(lander)
+  expect(dropped.status).toBe(0)
+  expect(dropped.err).toContain("land: WARNING: this landing undoes earlier commits on main.")
+  expect(dropped.err).toContain(`  ${added.slice(0, 7)} Change kept.txt`)
+  expect(dropped.err).toContain("git cherry-pick")
+
+  // A subsequent landing touching another file does not re-warn about the already-undone commit.
+  w.commit(lander, "other.txt", "fresh\n")
+  const later = await w.land(lander)
+  expect(later).toMatchObject({ status: 0, err: "" })
+})
+
+test("land brief --base validates a multi-commit landing", async () => {
+  const w = world()
+  const feed = feedOf(w)
+  const lander = feedClone(w, feed.url)
+  await w.land(lander)
+  const base = w.main()
+  w.commit(lander, "a.txt", "alpha\n")
+  const head = w.commit(lander, "b.txt", "beta\n")
+  await w.land(lander)
+
+  const partialPath = join(w.dir, "partial.md")
+  writeFileSync(
+    partialPath,
+    `---\nland: review\nframe: walkthrough\n---\n\n# Only b\n\nCovers b only.\n\n## Files\n\n### b.txt:1\n\n- L1!: Added b.\n`,
+  )
+  // With --base spanning both commits, missing a.txt fails coverage.
+  const missingCoverage = await w.start(lander, "true", {}, [
+    "brief",
+    head.slice(0, 7),
+    partialPath,
+    "--base",
+    base.slice(0, 7),
+  ]).result
+  expect(missingCoverage.status).toBe(1)
+  expect(missingCoverage.err).toContain("a.txt")
+
+  const docPath = join(w.dir, "multi.md")
+  writeFileSync(
+    docPath,
+    `---\nland: review\nframe: walkthrough\n---\n\n# Two files\n\nAdds a and b.\n\n## Files\n\n### a.txt:1\n\n- L1!: Added a.\n\n### b.txt:1\n\n- L1!: Added b.\n`,
+  )
+  const briefed = await w.start(lander, "true", {}, ["brief", head.slice(0, 7), docPath, "--base", base.slice(0, 7)])
+    .result
+  expect(briefed.status).toBe(0)
+  expect(briefed.out).toContain(`land: brief  refs/land-events/${head}/`)
+  feed.stop()
+})

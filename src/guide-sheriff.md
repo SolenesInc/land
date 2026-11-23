@@ -154,17 +154,25 @@ chose and why. It tells the fixer to:
 Add the owner to the failure's comment: the fixer, and where its report will
 appear. When the repair lands, add its sha.
 
-When `land.toml` has a `feed` key and the repair has landed, post it to the
-feed on the repair's commit, naming the culprit it repairs and the run that
-failed:
+When `land.toml` has a `feed` key and the repair has landed, post the repair
+to the feed on the repair's commit, naming the culprit it repairs and the run
+that failed:
 
 ```bash
 land event <repair sha> --kind repair --state pass --title "<fix|revert>: <failure>" --repairs <culprit sha> --url <failed run>
 ```
 
-Posting is best effort. When `land event` fails or the feed refuses the
-notice, say so in the issue's comment and go on. The issue stays the record,
-not the feed.
+When the failure traced to a real defect in `<culprit sha>` (not a flake or
+runner outage), also record it as a bug so CI escapes show up in `land bugs`
+and the feed's bug metrics:
+
+```bash
+land bug <culprit sha> --title "<failure>" --severity p1 --source ci --fixed-by <repair sha> --url <failed run>
+```
+
+Posting is best effort. When `land event` or `land bug` fails or the feed
+refuses the notice, say so in the issue's comment and go on. The issue stays
+the record, not the feed.
 
 ## Give every revert an owner
 

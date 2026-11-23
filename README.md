@@ -1,50 +1,73 @@
 # land
 
-`land` lands finished commits on a repository's `main`, with no pull request.
-It rebases your branch onto `origin/main`, runs the repository's gate, and
-pushes:
+`land` lands finished commits straight on a repository's `main`, with no pull
+request. It rebases your branch onto `origin/main`, runs the repository's fast
+gate, and pushes `main` together with a landing ref:
 
 ```text
 $ land
 land: note   .land/note.md
 land: gate   bun run check   ok in 1m 49s
 land: push   main is at 41d07be
+land: feed   https://land-feed.caketroll.cloud/SolenesInc/land/41d07be
 ```
 
-Each landing pushes `main` and a landing ref, `refs/landings/<head>`, in one
-atomic push. The ref names a commit, with no parent, that holds
-`landing.json`, what `land` knew at the push (its version, the base, the head,
-the gate's command, how long it took and the commit it ran on), and the
-note, when the lander wrote one. The note is markdown for the readers of
-`main`, written in `.land/note.md` or in the file `land --note <file>` names.
-`land` adds `.land/` to the clone's `.git/info/exclude`, and deletes the note
-file after the push. A normal clone does not fetch landing refs; read one with
+Each landing pushes `main` and `refs/landings/<head>` in one atomic push. The
+landing ref points to a parentless commit holding `landing.json` (what `land`
+knew at push time: its version, base, head, gate command, duration, checked
+commit, and recordings) and `note.md` when you wrote one. Write the note in
+`.land/note.md` or pass `land --note <file>`. `land` adds `.land/` to the
+clone's `.git/info/exclude` and deletes the note file after the push. Normal
+clones do not fetch landing refs; inspect one with
 `git fetch origin refs/landings/<head>` or GitHub's
 `GET /repos/{owner}/{repo}/git/ref/landings/<head>`.
 
-`land` refuses to start while the worktree has uncommitted changes or untracked
-files that git does not ignore, because the gate runs in the worktree and must
-see only what lands. When the rebase conflicts, `land` aborts it, names the
-files, and leaves your branch as it was. When the gate fails, `land` pushes
-nothing and exits with the gate's status. When `main` moves while the gate
-runs, `land` rebases and pushes without running the gate again, and names the
-commit the gate ran on. Lands from several worktrees of one clone can run at
-once.
+### Safety checks built into `land`
 
-`land guide` prints the procedure around a landing: branch, commit, check,
-review, note, land and report. `land guide review` and `land guide sheriff`
-print the procedures that keep `main` healthy after a landing; see
+- **Clean worktree:** refuses to start while tracked files have uncommitted
+  changes or non-ignored untracked files exist, so the gate sees only what
+  lands.
+- **Global author identity:** refuses commits whose author email differs from
+  your global git identity, and prints how to fix them.
+- **Rebase and conflict handling:** rebases onto `origin/main` before the gate
+  and again before pushing. If `land.toml` names a `resolve` command (for
+  example to regenerate generated files), `land` runs it on conflicts and
+  continues the rebase when it exits `0` with no unmerged files left. On any
+  other conflict, `land` aborts the rebase, names the files, and leaves your
+  branch untouched.
+- **Concurrent landings without locks:** fetches into a per-worktree ref
+  (`refs/worktree/land/<main>`) and pushes to the remote URL, so multiple
+  worktrees of one clone can land side by side. When `main` moves while the
+  gate runs, `land` rebases and pushes without rerunning the gate, naming the
+  commit the gate ran on.
+- **Undone-commit warning:** after pushing, compares the landing against the
+  last 30 commits on `main` touching the same files and warns if the landing
+  completely undid an earlier commit.
+
+`land guide` prints the full landing procedure for agents and humans: branch,
+commit, check, review, note, land, report, and responding to post-landing
+feedback. `land guide review` and `land guide sheriff` print the procedures
+that keep `main` healthy after landing; see
 [Keep main healthy](#keep-main-healthy).
 
 ## Install
 
-Run this on macOS arm64 or Linux x64. The binary needs no Bun.
+Install on macOS arm64 or Linux x64. The binary is standalone and needs no
+Bun.
+
+With `mise`:
+
+```bash
+mise use -g github:SolenesInc/land
+```
+
+Or download directly:
 
 ```bash
 mkdir -p ~/.local/bin && curl -fsSL "https://github.com/SolenesInc/land/releases/latest/download/land-$(uname -s)-$(uname -m)" -o ~/.local/bin/land && chmod +x ~/.local/bin/land
 ```
 
-Put `~/.local/bin` on your `PATH`, then check the install with `land --version`.
+Put `~/.local/bin` on your `PATH`, then verify with `land --version`.
 
 ## Adopt land in a repository
 
@@ -53,33 +76,43 @@ Run `land init` at the root of a clone:
 ```text
 $ land init
 land: land.toml  wrote gate = "bun run check", from the check script in package.json
+land: land.toml  wrote feed = "https://land-feed.caketroll.cloud", where landings show
 land: AGENTS.md  added the trunk declaration under ## Landing
+land: hooks      installed pre-push and prepare-commit-msg
 
 Decide:
   - Whether bun run check should run before every push. It holds every landing until it passes, so name a faster check in land.toml if it is slow, and leave the rest to CI.
 
+Install the App on the repository, so the feed shows its landings: https://github.com/apps/attn-land/installations/new
+
 Then commit land.toml and AGENTS.md, and land the commit with land.
 ```
 
-It writes two things, and never overwrites either:
+`land init` never overwrites an existing file. It sets up two things:
 
-1. `land.toml`, which names the gate: the checks that must pass before a push.
-   `land init` proposes the first of these it finds: a `check` script in
-   `package.json`, a `check` target in the `Makefile`, a `test` script, a
-   `test` target, `go test ./...` for a `go.mod`, or `cargo test` for a
-   `Cargo.toml`. When it finds none, it writes no `land.toml` and asks you to
-   name the gate. When the clone's `origin/HEAD` names a branch other than
-   `main`, it adds `main = "<branch>"`. A clone made with `git clone` has
-   `origin/HEAD`; set it in another with `git remote set-head origin --auto`.
+1. **`land.toml`** at the repository root. `land init` proposes the first
+   check it finds: a `check` script in `package.json`, a `check` target in
+   `Makefile`, a `test` script, a `test` target, `go test ./...` for `go.mod`,
+   or `cargo test` for `Cargo.toml` (choosing `bun`, `pnpm`, `yarn`, or `npm`
+   from the lockfile and skipping `npm init`'s placeholder). When `origin/HEAD`
+   is not `main`, it writes `main = "<branch>"`.
 
-   `land` runs the gate with `sh -c` at the repository root, and sets
-   `LAND_BASE` to the `origin/main` commit the landing sits on and `LAND_HEAD`
-   to the commit it pushes. Leave `gate` out only if the repository has no
-   checks.
+   All keys supported in `land.toml` (unknown keys fail so a typo never skips
+   a stage):
 
-2. The trunk declaration, two lines appended under `## Landing` to
-   `AGENTS.md`, or to `CLAUDE.md` when only that exists. With neither, it
-   creates `AGENTS.md` holding only the two lines.
+   ```toml
+   gate = "scripts/land-gate.sh"             # shell command; receives LAND_BASE and LAND_HEAD
+   main = "main"                             # target branch (defaults to "main")
+   resolve = "scripts/land-resolve.sh"       # optional rebase-conflict resolver; receives LAND_BASE
+   record = "scripts/land-record.sh"         # optional capture command for `land record`; receives LAND_MEDIA
+   feed = "https://land-feed.caketroll.cloud" # optional feed URL for landings, media, and review events
+   ```
+
+   Leave `gate` out only when the repository has no pre-push checks.
+
+2. **The trunk declaration**, two lines appended under `## Landing` to
+   `AGENTS.md` (or `CLAUDE.md` when only that exists; creates `AGENTS.md` when
+   neither exists):
 
    ```markdown
    This repository lands on `main` with `land`, with no pull request.
@@ -88,61 +121,57 @@ It writes two things, and never overwrites either:
 
 A second `land init` changes nothing.
 
-The first `land` in a clone, or `land init`, installs two hooks in the
-clone's `.git/hooks`, so every worktree has them:
+### Hooks
 
-- `pre-push` refuses a plain `git push` to `main`.
-- `prepare-commit-msg` adds `Attn-Session:` and `Attn-Seed:` trailers to a
-  commit made inside an attn session,
-  from `attn presence`. Anywhere else it does nothing, and it never fails a
-  commit.
+The first `land` or `land init` in a clone installs two hooks in the clone's
+shared `.git/hooks`, so every linked worktree inherits them:
 
-`land` installs no hook when the clone sets `core.hooksPath`, and leaves a
-hook of the same name that it did not install. It says so on every landing.
+- `pre-push` refuses a plain `git push` to `main` unless `LAND_LANDING=1` or
+  `--no-verify`.
+- `prepare-commit-msg` adds `Attn-Session:` and `Attn-Seed:` trailers to
+  commits made inside an attn session, via `attn presence`. Outside attn it
+  does nothing and never fails a commit.
+
+If the clone sets `core.hooksPath` (for example `.githooks`), `land` installs
+nothing and checks whether that directory already supplies a `pre-push` hook
+recognizing `LAND_LANDING` and a `prepare-commit-msg` hook adding
+`Attn-Session:`. It warns only about whichever hook is missing.
 
 ## Record the change
 
-`land record [args]` captures what a change looks like, and prints the
-markdown that links it:
+`land record [args]` captures what a change looks like and prints the markdown
+lines that link each new recording:
 
 ```text
 $ land record login
 ![login](.land/media/login.png)
 ```
 
-The repository supplies the capture, as the `record` key in `land.toml`: a
-shell command that writes its recordings into `$LAND_MEDIA`. `land` runs it
-with `sh -c` at the repository root, with `LAND_MEDIA` set to the absolute path
-of `.land/media/` and the arguments you passed appended. It then prints
-`![<name>](.land/media/<file>)` for each file the command created or wrote
-again, in name order. The command's own output goes to stderr, so stdout holds
-only those lines. When the command fails, `land` exits with its status and
-prints no line. With no `record` key it fails and names the key.
-
-```toml
-record = "scripts/record.sh"
-```
-
-`land` adds `.land/` to the clone's `.git/info/exclude`, so the recordings
-never block a landing and no repository commits an ignore rule.
+Declare the capture script as `record` in `land.toml`. `land` runs it with
+`sh -c` at the repository root, passing `LAND_MEDIA` set to the absolute path
+of `.land/media/` and forwarding your arguments. Its own stdout goes to stderr
+so stdout holds only `![<name>](.land/media/<file>)` lines, in name order.
+`land` adds `.land/` to `.git/info/exclude`, so recordings never block a
+landing.
 
 ## Show landings in the feed
 
-The feed, `https://land-feed.caketroll.cloud`, shows each landing with its
-note and recordings. A repository joins it by installing the
-[Attn Land App](https://github.com/apps/attn-land/installations/new) and
-naming the feed in `land.toml`, which `land init` writes:
+The feed (`https://land-feed.caketroll.cloud`) shows each landing with its
+note, recordings, CI runs, human review comments, guided review briefs, and
+attributed bugs. A repository joins by installing the
+[Attn Land App](https://github.com/apps/attn-land/installations/new) (or
+granting it organization-wide access) and setting `feed` in `land.toml`:
 
 ```toml
 feed = "https://land-feed.caketroll.cloud"
 ```
 
-A note may then link a recording that `land record` made. Before the gate,
-`land` rewrites each local link to the recording's feed address,
-`<feed>/m/<owner>/<repo>/<sha256>.<ext>`, and lists the file in
-`landing.json` by its SHA-256, extension and size. After the push it uploads
-each file, deletes the ones that went with the note, and prints the landing's
-address:
+When `.land/note.md` links a local media file (`png`, `jpg`, `jpeg`, `gif`,
+`webp`, `mp4`, `webm`), `land` rewrites the link to
+`<feed>/m/<owner>/<repo>/<sha256>.<ext>`, records its hash and size in
+`landing.json`, uploads it after the push with no credential (the feed verifies
+the ref on GitHub), deletes uploaded files inside `.land/`, and prints the
+landing URL:
 
 ```text
 $ land
@@ -153,64 +182,70 @@ land: media  1 recording uploaded
 land: feed   https://land-feed.caketroll.cloud/SolenesInc/land/41d07be
 ```
 
-`land` sends the feed no credential: the feed uploads only what the landing
-ref on GitHub lists. A link to a missing file, a recording over 200 MB, and a
-local recording with no `feed` key each stop `land` before the gate.
+A missing file, a recording over 200 MB, or a local recording without a `feed`
+key fails before the gate with nothing pushed. Feed failures never fail a
+landing: unsent uploads and event notices wait in
+`$XDG_STATE_HOME/land/outbox` (or `~/.local/state/land/outbox`), and the next
+`land` in any repository drains the outbox first.
 
-`land` never fails because of the feed. What it cannot send waits in the
-outbox, `$XDG_STATE_HOME/land/outbox` or `~/.local/state/land/outbox`, and
-every later `land`, in any repository, sends it first and prints how many
-still wait.
+## Post-landing review, briefs, events, and bugs
 
-`land event` tells the feed something that happened after a landing, such as
-a review finding or a repair:
+`land` pairs with `land-feed` for post-landing human and agent review without
+pull requests:
 
-```text
-$ land event 41d07be --kind finding --state fail --title "banner flickers" --detail-file finding.md
-land: event  refs/land-events/41d07be…/9c2e1f0… pushed; the feed has it
-```
-
-It commits `event.json`, with no parent, pushes the commit to
-`refs/land-events/<landing sha>/<event commit sha>`, then notifies the feed,
-which reads the ref before it stores the event. `--state` is `pass`, `fail`,
-`run` or `info`; `--url`, `--detail-file` (markdown) and `--repairs <sha>`
-are optional. A notice the feed does not take waits in the outbox.
-
-### Post-landing review and bug tracking
-
-`land` pairs with `land-feed` for post-landing human review and bug attribution:
-
-- `land auth token <token>` saves a feed API token (or set `LAND_FEED_TOKEN`) for reading private repositories.
-- `land show <sha|url>` prints the LLM-ready markdown bundle (note, open review comments with diff context, and registered bugs) for a landing.
-- `land comments [<sha|url>] [--open]` lists open human review comments; `land comments resolve <id> [--by <sha>]` marks one resolved.
-- `land review check <file>` validates a review document (`brief` / `walkthrough` / `map` frames, stops, line ranges, diagrams, and file coverage) against git; `land brief <sha> <file>` validates and pushes it to `refs/land-events/`.
-- `land bug <culprit-sha> --title "<summary>" [--severity p0|p1|p2] [--source agent|review|ci|prod|human] [--location path:line] [--fixed-by <sha>]` attributes a bug to the commit that introduced it; `land bugs [--open] [--since 30d] [--path <prefix>]` queries registered bugs for retrospective analysis.
+- **Authenticate for private repositories:**
+  `land auth token <token | ->` stores a feed API token in
+  `~/.config/land/token` (mode `0600`), or set `LAND_FEED_TOKEN`. Check with
+  `land auth status`, clear with `land auth logout`.
+- **Read a landing and its open comments:**
+  `land show <sha|url>` prints a markdown bundle containing the landing note,
+  open review comments with surrounding diff hunks, and registered bugs.
+  `land comments [<sha|url>] [--open] [--json]` lists comments;
+  `land comments resolve <id> [--by <sha>]` marks one resolved after your fix
+  lands.
+- **Publish guided review briefs:**
+  `land review check <file> [--base <sha>] [--head <sha>]` validates a review
+  document (`brief`, `walkthrough`, or `map` frames, stops, line ranges,
+  sequence diagrams, and file coverage) against git.
+  `land brief <sha> <file> [--base <sha>] [--no-check]` validates and pushes
+  the review document to `refs/land-events/`.
+- **Post lifecycle events:**
+  `land event <sha> --kind <kind> --state pass|fail|run|info --title <title> [--url <url>] [--detail-file <file>] [--repairs <sha>]`
+  commits `event.json` with no parent, pushes `refs/land-events/<sha>/<id>`,
+  and notifies the feed.
+- **Attribute and query bugs:**
+  `land bug <culprit-sha> --title "<summary>" [--severity p0|p1|p2] [--source agent|review|ci|prod|human] [--location path[:line]] [--detail-file <file>] [--fixed-by <sha>] [--url <url>]`
+  records a regression against the commit that introduced it (and optionally
+  emits a paired repair event).
+  `land bugs [--open] [--since 30d] [--path <prefix>] [--severity p0|p1|p2] [--json]`
+  queries registered bugs for retrospective analysis or before touching a
+  sensitive area.
 
 ## Keep main healthy
 
-A landing passes the gate, but CI on `main` runs the whole check and can still
-go red, and nobody reviewed the change before it landed. Two procedures, which
-any agent can follow, cover what happens after the push:
+A landing passes the fast gate, while full CI runs on `main` after the push.
+Two runner-agnostic procedures keep `main` healthy:
 
 - `land guide review` reviews every commit in `origin/reviewed..origin/main`,
-  sends each confirmed finding to someone who will fix it, and moves the
-  branch `reviewed` forward.
-- `land guide sheriff` finds each failed CI run on `main`, its culprit and a
-  repair, and keeps the record in one issue, `Branch health: main`.
+  routes each confirmed P0 or P1 finding to someone who will fix it, posts
+  findings and bugs to the feed, and moves `reviewed` forward.
+- `land guide sheriff` finds each failed CI run on `main`, identifies the
+  culprit, dispatches a fix or clean revert, posts repairs and CI bugs to the
+  feed, and tracks state in one issue, `Branch health: main`.
 
-A repository adds what the procedures need to know about it in
-`.agents/land/review.md` and `.agents/land/sheriff.md`. Review starts once the
-branch `reviewed` exists: push it at the first commit to review, with
+Put repository-specific rules in `.agents/land/review.md` and
+`.agents/land/sheriff.md`. Start review on a repository by pushing the
+`reviewed` branch at the first commit to review:
 `git push origin <commit>:refs/heads/reviewed`.
 
-A runner starts an agent with a prompt that installs `land` and follows one
-procedure. The prompt also says what the runner can do: start a reviewer or a
-fixer, reach the session that landed a commit, land a fix, and ask a person.
-The procedures fall back to GitHub issues for whatever the runner cannot do.
+A runner starts an agent with a prompt that installs `land`, runs the guide,
+and declares what capabilities the runner has (starting reviewers or fixers,
+reaching the session that landed a commit, landing fixes, asking a person).
+The procedures fall back to GitHub issues for any capability the runner lacks.
 
 ### The prompts
 
-Paste the sheriff prompt:
+Sheriff prompt:
 
 ```text
 You are the sheriff of this repository's main branch. If land is not on your
@@ -224,7 +259,7 @@ commit. You can land a fix with land. Ask a person by commenting on the
 Branch health: main issue.
 ```
 
-Paste the review prompt:
+Review prompt:
 
 ```text
 You review the commits that landed on this repository's main branch. If land
@@ -237,37 +272,32 @@ You start reviewers as subagents. You cannot reach the session that landed a
 commit. You can land a fix with land. Ask a person by opening a GitHub issue.
 ```
 
-Change the last paragraph of each prompt when your runner differs. When it cannot run the
-gate, write "You cannot land a fix." When it can start separate sessions, say
-how.
+Adjust the last paragraph when your runner differs (for instance, write
+"You cannot land a fix." when the runner lacks the gate's toolchain, or explain
+how to start separate sessions).
 
 ### Claude Code scheduled task
 
-A scheduled task in the cloud (claude.ai/code, Routines) or in the desktop app
-runs the prompt on a schedule:
+A scheduled task in the cloud (`claude.ai/code`, Routines) or in the desktop
+app runs the prompt on a schedule:
 
-- **Trigger.** A schedule. Scheduled tasks run at most once an hour, and
-  their GitHub triggers cover pull requests, releases and issues only, with no
-  trigger for a finished CI run. Run the sheriff hourly, and in its prompt
-  tell it to use `4500` for the window in the procedure's first command. Run
-  review hourly or daily.
-- **Repository.** Attach the repository. The run clones it, and its `gh`
-  reaches GitHub's REST API through Anthropic's proxy. The procedures use
-  `gh api`, because the proxy refuses the GraphQL API that `gh issue` uses.
-- **Network.** The default environment, Limited with package managers
-  allowed, reaches GitHub's release downloads, so the install line works.
-- **Landing.** `land` must run the gate, so the environment needs the gate's
-  toolchain. Install it in the environment's setup script. Without it, write
-  "You cannot land a fix." A run pushes to `main` only through `land`, and
-  GitHub's branch rules decide whether it may.
+- **Trigger:** schedule. Cloud scheduled tasks run at most hourly and do not
+  trigger on finished CI runs, so run the sheriff hourly and pass `4500` as
+  the lookback window in the procedure's first command. Run review hourly or
+  daily.
+- **Repository:** attach the repository. The procedures use `gh api` (REST),
+  because Anthropic's proxy refuses GraphQL queries from `gh issue`.
+- **Network:** the default environment (Limited with package managers allowed)
+  reaches GitHub release downloads.
+- **Landing:** install the gate's toolchain in the setup script if the runner
+  will land fixes; otherwise write "You cannot land a fix."
 
-A desktop scheduled task runs in a folder on your machine, with your own `gh`
-and toolchain. Point it at a clone that holds no work.
+A desktop scheduled task runs on your own machine with your `gh` and
+toolchain; point it at a clone that holds no active work.
 
 ### Claude Managed Agents
 
-Your own code starts a session with the prompt as its first event, on a
-schedule or from a webhook it receives, such as GitHub's `workflow_run`:
+Start a session on a schedule or from a `workflow_run` webhook:
 
 ```bash
 curl https://api.anthropic.com/v1/sessions \
@@ -279,15 +309,15 @@ curl https://api.anthropic.com/v1/sessions \
        "initial_events": [{"type": "user.message", "content": [{"type": "text", "text": "<prompt>"}]}]}'
 ```
 
-Give the agent the built-in toolset, which includes `bash`, and an environment
-whose network reaches GitHub. The token needs to push the repository and
-write its issues. Add "The repository is at /workspace/repo." to the prompt.
+Enable the built-in toolset (`bash`), allow GitHub network access, give the
+token push and issue permissions, and add
+`"The repository is at /workspace/repo."` to the prompt.
 
 ### GitHub Actions
 
-`anthropics/claude-code-action` runs the prompt in a workflow. Start the
-sheriff when CI on `main` completes, and review on a schedule. The sheriff
-starts on a green run too, so it can close its record:
+Run the prompt with `anthropics/claude-code-action`. Trigger the sheriff when
+CI on `main` completes (including green runs so it closes its record), and
+trigger review on a schedule:
 
 ```yaml
 name: sheriff
@@ -320,23 +350,19 @@ jobs:
             <the sheriff prompt>
 ```
 
-Name your CI workflow in `workflows`. The `concurrency` group runs one
-sheriff at a time, so two failures close together get one dispatch each. The job's `GITHUB_TOKEN` pushes as
-`github-actions`, and a push by that token starts no new workflow run, so CI
-does not check a repair this job lands. Give the job a token of your own when
-it lands fixes.
+The default `GITHUB_TOKEN` pushes as `github-actions`, which does not trigger
+CI on the repair commit; pass a personal or App token when the workflow lands
+fixes.
 
 ### attn automation
 
-An attn automation runs the prompt on a schedule, with a guard that starts the
-agent only when there is work. For the sheriff's guard, use the procedure's
-first command followed by
-`gh api 'repos/{owner}/{repo}/issues?state=open' --jq '.[] | select(.title=="Branch health: main") | .number'`,
-so the sheriff also starts while its record is open and can close it. Use
-`git fetch -q origin && git log --oneline -1 origin/reviewed..origin/main` as
-review's. attn can reach the session that landed a commit, through its
-`Attn-Session:` trailer, and start reviewers and fixers as separate sessions.
-Say so, and how, in the prompt. `attn guide automations` describes the rest.
+An attn automation runs the prompt on a schedule with a guard that starts an
+agent only when work exists. For the sheriff's guard, combine the procedure's
+first command with checking for an open `Branch health: main` issue so it also
+runs to close the record. For review's guard, use
+`git fetch -q origin && git log --oneline -1 origin/reviewed..origin/main`.
+attn can message the commit's `Attn-Session:` directly and delegate separate
+sessions for reviewers and fixers; state how in the prompt.
 
 ## Develop
 
@@ -345,10 +371,11 @@ bun install
 bun run check
 ```
 
-`bun run check` typechecks, checks formatting, and runs the tests, which build
-the binary and drive it against real git repositories. This repository lands
-with its own `land`. CI runs the same check on `main` on Ubuntu and macOS.
+`bun run check` typechecks, checks formatting, and runs the test suite, which
+builds `dist/land` and drives it against real git repositories. This
+repository lands with its own `land`. CI runs the same check on `main` on
+Ubuntu and macOS.
 
-To release, change `version` in `package.json` and land the change. CI then
-publishes the binaries as the GitHub release `v<version>`. A lander gets a
-change to the guides only with the next release.
+To release, bump `version` in `package.json` and land the change. CI publishes
+the macOS and Linux binaries under the GitHub release `v<version>`. Landers
+receive updated guide text with the next release.

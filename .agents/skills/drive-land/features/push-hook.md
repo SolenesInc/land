@@ -13,10 +13,13 @@ the gate, unless someone decides to push past it.
 - `hook-refuse` refuses a plain push to `main`.
 - `hook-other-branch` lets a push to any other branch through.
 - `hook-no-verify` lets `git push --no-verify` through.
-- `hook-hookspath` installs nothing in a clone that sets `core.hooksPath`, and
-  says on every landing that it installs no hooks.
+- `hook-hookspath` installs nothing in a clone that sets `core.hooksPath`,
+  checks whether that hooks directory already provides a `pre-push` hook
+  referencing `LAND_LANDING` (and a `prepare-commit-msg` hook referencing
+  `Attn-Session:`), and warns on every landing only about whichever hook is
+  not already handled.
 - `hook-foreign` leaves another pre-push hook as it is, and says on every
-  landing that plain pushes are not refused.
+  landing that plain pushes are not refused unless it handles `LAND_LANDING`.
 
 ## How to get to it
 

@@ -107,23 +107,31 @@ A reviewer with no confirmed findings is done.
 
 ## Post each finding to the feed
 
-When `land.toml` has a `feed` key, post each routed finding to the feed, on the
-commit it names. Write the finding, its `file:line` and what a fix needs to a
-markdown file, and give where the finding went as `--url`: the issue, or the
-fix's commit on GitHub. Leave out `--url` when the finding went in a message.
+When `land.toml` has a `feed` key, post each routed finding to the feed on the
+commit it names. Write the finding, its `file:line`, and what a fix needs to a
+markdown file, and pass where the finding went as `--url` (the issue, or the
+fix's commit on GitHub). Omit `--url` when the finding went in a message.
 
 ```bash
 land event <sha> --kind finding --state fail --title "P1: <title>" --url <route> --detail-file <file>
 ```
 
-For confirmed bugs attributed to an earlier commit, register them with
-`land bug <sha> --title "<title>" --severity p0|p1 --source review [--location path:line] --detail-file <file>`.
-When you also write a review document for a landing (using the `brief` / `walkthrough` / `map` grammar),
-validate it with `land review check <file>` and push it with `land brief <sha> <file>`.
+For each confirmed defect (a P0 or P1 bug traced to an earlier commit), also
+record it in the feed's bug ledger so it annotates the diff and tracks time to
+fix:
 
-Posting is best effort. When `land event` fails or the feed refuses the
-notice, note it in the record of the pass and go on. The record and the issues
-stay the record of the pass, not the feed.
+```bash
+land bug <sha> --title "<title>" --severity p0|p1 --source review [--location path:line] --detail-file <file>
+```
+
+When you also write a review document (`brief`, `walkthrough`, or `map`) for a
+landing, validate it against git with `land review check <file>` and publish
+it with `land brief <sha> <file>` (pass `--base <sha>` for a multi-commit
+landing).
+
+Posting is best effort. When `land event`, `land bug`, or `land brief` fails
+or the feed refuses the notice, note it in the record of the pass and go on.
+The record and the issues stay the record of the pass, not the feed.
 
 ## Record the pass
 

@@ -4,13 +4,13 @@ This repository lands changes straight on `main`, with no pull request. A
 landing is one push of finished commits through `land`. `land` rebases your
 branch onto `origin/main`, runs the gate that `land.toml` names, and pushes.
 Your work ends when `land` pushes. After that, CI on `main` runs the
-repository's whole check, and the repository may review what landed and
-repair a red `main` (`land guide review`, `land guide sheriff`).
+repository's full checks, and the repository may review what landed and repair
+a red `main` (`land guide review`, `land guide sheriff`).
 
 These steps hold in every repository that lands with `land`. A repository
 adopts `land` with `land init`, which writes `land.toml` and the two lines of
 guidance that point here. The repository's own guidance names its checks, its
-review skills and anything it adds to a step. Where the two disagree, the
+review skills, and anything it adds to a step. Where the two disagree, the
 repository's guidance wins.
 
 ## Branch
@@ -23,27 +23,28 @@ git fetch origin main && git switch -c <name> origin/main
 ```
 
 Rebase onto `origin/main` at the start of every step. Land each slice as soon
-as it works, because commits held back on the branch turn into conflicts. Land
+as it works, because commits held back on a branch collect conflicts. Land
 unfinished work unwired, or behind a setting that is off by default.
 
 ## Commit
 
-Write each commit message for a reader of `main`: say what changed and why.
-When the slice adds code that nothing uses yet, say in one line what will use
-it and which plan says so.
+Write each commit message for a reader of `main`: state what changed and why.
+When a slice adds code that nothing uses yet, say in one line what will use it
+and which plan or seed names it.
 
-Commit as yourself. `land` refuses commits whose author is not your global git
-identity, and says how to fix them. To commit under another identity, use
-`git -c user.email=…` on that one command. Never run `git config` in a
-worktree: it writes to the config that every worktree of the clone shares.
+Commit as yourself. `land` refuses commits whose author differs from your
+global git identity, and prints how to fix them. To commit under another
+identity, pass `git -c user.email=...` on that one command. Never run
+`git config` in a linked worktree: it writes to the config that every worktree
+of the clone shares.
 
 ## Check
 
-Run the tests that cover the behavior you changed. Then check the change on
-the surface it touches, such as the command line, the API or the interface,
-the way someone would use it. The repository's guidance names those checks
-and how to reach each surface. Do not run the whole suite by hand: the gate
-runs before the push, and CI runs the whole check on `main` after it.
+Run the targeted tests that cover the behavior you changed. Then check the
+change on every surface it touches (the CLI, the API, the UI) the way a person
+or another program uses it. The repository's guidance names those checks and
+how to reach each surface. Do not run the full suite by hand: the gate runs
+before the push, and CI runs the full check on `main` after it.
 
 ## Review
 
@@ -61,50 +62,51 @@ hit. Give each reader of a risky slice its own scope:
 
 - Correctness: edge cases, concurrency, restarts, other platforms, and what
   the user sees.
-- Every surface: the parallel paths the change should reach. These are the
-  other entry points, clients and platforms, the wire contract, the docs, and
-  the way back out of anything new.
-- Extra machinery: each new layer, option, fallback, cache or copy of state,
+- Every surface: the parallel paths the change must reach. These include other
+  entry points, clients, platforms, wire contracts, docs, and the way back out
+  of anything new.
+- Extra machinery: each new layer, option, fallback, cache, or copy of state,
   and the current requirement that it serves.
 
-Run each reader on its own. Its only context is the diff
+Run each reader independently. Give it only the diff
 (`git diff origin/main...HEAD`), what the slice is for, and the guidance the
-slice names. Readers report. They do not edit.
+slice names. Readers report findings; they do not edit files.
 
-When every reader has reported, merge duplicate findings. Try to refute each
-finding against the code. Fix the findings that stand, check the fixes as in
-Check, and commit. Settle the uncertain ones yourself, or ask.
+When every reader reports back, merge duplicate findings and verify each one
+against the code. Fix the findings that stand, check the fixes as in Check,
+and commit. Settle uncertain findings yourself, or ask.
 
 ## Note
 
-When the change has a visible surface, such as a screen, a page or a
-terminal, record it:
+When the change has a visible surface (a screen, a page, or a terminal),
+capture it first:
 
 ```bash
-land record
+land record [args]
 ```
 
-`land record` runs the command that `land.toml` names as `record`, and prints
-one markdown line for each recording it made, such as
-`![banner](.land/media/banner.mp4)`.
+`land record` runs the `record` command from `land.toml` and prints one
+markdown line per new recording, such as `![banner](.land/media/banner.mp4)`.
 
-Write the note for this landing in `.land/note.md`: one sentence for a reader
-of `main` on what changed for them, the recording's line when you made one,
-and a diagram when one helps. `land` adds `.land/` to the clone's
-`.git/info/exclude`, so the note is never committed and never stops a landing
-as an untracked file. To keep the note elsewhere, run `land --note <file>`
-instead of `land`.
+Write a brief note for the landing in `.land/note.md`. Write for a reader of
+`main` who lands cold on the feed: state in a few lines what changed for them,
+why, and any non-obvious trade-off. Paste the recording's line when you made
+one, and add a small diagram when one clarifies the flow. Do not paste test
+logs or commit lists.
 
-A note may link a local recording only when `land.toml` names a `feed`.
-`land` rewrites each such link to the recording's address on the feed, lists
-the file in the landing, and uploads it after the push. A recording that does
-not upload waits in the outbox on your machine, and every later `land` sends
-it. The landing does not wait for it.
+`land` adds `.land/` to the clone's `.git/info/exclude`, so the note is never
+committed and never triggers the untracked-file check. To keep the note
+elsewhere, run `land --note <file>` instead of `land`.
 
-`land` pushes the note with `main`, in the landing ref
-`refs/landings/<head>`, and deletes the note file after the push. When `land`
-pushes nothing, the note stays for the next `land`. A note cannot change after
-it lands, as a commit message cannot.
+A note may link a local recording only when `land.toml` names a `feed`. Before
+the gate runs, `land` rewrites each local link to its feed address, lists the
+file in `landing.json`, and uploads it after the push. Any recording that
+fails to upload waits in the outbox on your machine, and the next `land` in
+any repository sends it. A feed outage never blocks a landing.
+
+`land` pushes the note beside `main` in the landing ref `refs/landings/<head>`
+and deletes the note file after the push. When `land` pushes nothing, the note
+stays for the next attempt. A note cannot change after it lands.
 
 ## Land
 
@@ -112,65 +114,94 @@ it lands, as a commit message cannot.
 land
 ```
 
-`land` stops before the push in these cases, and says why:
+`land` stops before the push in these cases and says why:
 
 - Your worktree has uncommitted changes. Commit or stash them.
-- Your worktree has untracked files that git does not ignore. The gate runs
-  in the worktree, so it could pass because of a file the landing does not
-  contain. Commit, remove or ignore each file that `land` names.
-- A commit's author is not your global git identity. Fix the commits as the
-  message says.
-- The rebase onto `origin/main` conflicts. `land` aborts the rebase, so your
-  branch is as it was, and names the files. Resolve the conflict with
-  `git rebase origin/main`, rerun the checks the resolution touches, and run
-  `land` again.
-- The note links a local file that does not exist, a recording over 200 MB,
-  or a recording when `land.toml` names no `feed`.
-- The gate fails. `land` exits with the gate's status. Fix the failure and run
-  `land` again. If the failure is in code you did not touch and it passes on
-  `origin/main`, it may be a flake: run `land` again, and name the test in
-  your report.
+- Your worktree has untracked files that git does not ignore. The gate runs in
+  the worktree and must see only what lands. Commit, remove, or ignore each
+  listed file, then run `land` again.
+- A commit's author differs from your global git identity. Fix the commits as
+  the message says.
+- The rebase onto `origin/main` conflicts. When `land.toml` names a `resolve`
+  command (for example to regenerate generated files), `land` runs it first
+  and continues the rebase if it resolves and stages the conflicts. On any
+  other conflict, `land` aborts the rebase, leaves your branch as it was, and
+  names the conflicted files. Rebase with `git rebase origin/main`, rerun the
+  checks the resolution touches, and run `land` again.
+- The note links a missing file, a recording over 200 MB, or a local recording
+  when `land.toml` names no `feed`.
+- The gate fails. `land` pushes nothing and exits with the gate's status. Fix
+  the failure and run `land` again. If the failure is in code you did not
+  touch and passes on `origin/main`, it may be a flake: run `land` again and
+  name the test in your report.
 
-Every landing pushes `main` and the landing ref `refs/landings/<head>` in one
-push, so both move or neither does. The ref's commit holds `landing.json`,
-what `land` knew at the push, and the note when there is one.
+Every landing pushes `main` and `refs/landings/<head>` in one atomic push, so
+both move or neither does. The ref's commit holds `landing.json` (what `land`
+knew at the push) and `note.md` when you wrote one.
 
 When `main` moves while the gate runs, `land` rebases and pushes without
 running the gate again, and prints
-`land: main moved after the gate ran on <commit>`. Your checks still count.
-Name that commit in your report.
+`land: main moved after the gate ran on <commit>`. Your checks still count;
+name that commit in your report.
 
-The first `land` in a clone installs a pre-push hook that refuses a plain
-`git push` to `main`. Use `git push --no-verify` only when `land` cannot run,
-and only after you run the gate yourself.
+If the last lines of output print
+`land: WARNING: this landing undoes earlier commits on main`, check the listed
+commits right away. The push has already happened. If you did not mean to undo
+them, restore each one in a new landing with `git cherry-pick` and say so in
+your report.
+
+The first `land` or `land init` in a clone installs a `pre-push` hook that
+refuses a plain `git push` to `main` (and a `prepare-commit-msg` hook for attn
+trailers), unless the clone manages its own hooks via `core.hooksPath`. Use
+`git push --no-verify` only when `land` cannot run, and only after you run the
+gate yourself.
 
 ## Report
 
 Report where the work was asked for:
 
-- the landed commits, from `land: push   main is at <commit>`, and the commit
+- the landed commits from `land: push   main is at <commit>`, and the commit
   the gate ran on when `main` moved
-- the landing on the feed, from `land: feed   <address>`, and any recording
-  that `land` says waits in the outbox
+- the landing address from `land: feed   <address>`, and any recording `land`
+  says waits in the outbox
 - what you checked, on which surface, with the evidence
-- the review: which readers ran, the findings you fixed, and the findings you
-  refuted
-- any test that failed and passed on a second run
+- the review: which readers ran, the confirmed findings you fixed, and the
+  findings you refuted
+- any test that failed and passed on a second run, and any undone-commit
+  warning you acted on
 
 ## After the push
 
 Do not watch CI on `main` unless the repository's guidance asks you to.
 
-A reviewer or the sheriff may later tell you about your landing: a finding to
-fix, or a revert of your commit because it broke `main`. When one does, fix it
-the same way you landed it. Start a new branch from `origin/main`, make the
-fix, check it and land it with `land`. To land reverted work again, run
-`git revert <revert sha>` on that branch first, then fix the problem. Report
-the fix to whoever told you.
+### Respond to reviews and sheriff notices
 
-When a human leaves post-landing review comments on the feed, read them with
-`land show <sha-or-url>` or `land comments --open`, address them on a new branch,
-land the fix, and mark comments resolved with `land comments resolve <id> --by <fix-sha>`.
-When you discover a bug introduced by an earlier commit `<culprit>`, register it
-with `land bug <culprit> --title "<summary>" --severity p0|p1|p2 [--location path:line] [--fixed-by <fix-sha>]`
-so humans and future agents can trace regressions over time.
+A reviewer or the sheriff may send you a finding to fix or notify you that
+your commit was reverted because it broke `main`. Fix it the same way you
+landed it: start a new branch from `origin/main`, make the fix, check it, and
+land it with `land`. To land reverted work again, run
+`git revert <revert sha>` on that branch first, fix the underlying problem,
+and land. Report the fix to whoever notified you.
+
+When a person leaves post-landing review comments on the feed:
+
+1. Read the full context with `land show <sha-or-url>` (prints the landing
+   note, open comments with surrounding diff hunks, and registered bugs), or
+   list open comments across the repository with `land comments --open`.
+2. Fix the issue on a new branch from `origin/main` and land it with `land`.
+3. Close the loop by marking each addressed comment resolved:
+   `land comments resolve <id> --by <fix-sha>`.
+
+### Record bugs you trace
+
+When you diagnose a bug caused by an earlier commit `<culprit>`, record it on
+the feed so humans and future agents can trace regressions in that area:
+
+```bash
+land bug <culprit> --title "<summary>" --severity p0|p1|p2 [--location path:line] [--fixed-by <fix-sha>]
+```
+
+Inspect past regressions in an area before editing it with
+`land bugs --path <prefix>` or `land bugs --open`. For private repositories,
+check token setup with `land auth status` (`LAND_FEED_TOKEN` or
+`land auth token <token>`).

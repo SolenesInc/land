@@ -18,8 +18,9 @@ session and the seed behind each commit. Outside attn, commits are unchanged.
   commit's trailers as they were.
 - `trailer-install` is installed with the [Push hook](push-hook.md), by the
   same rules: the clone's shared `.git/hooks`, nothing when `core.hooksPath`
-  is set, and a warning on every landing when another `prepare-commit-msg` is
-  there.
+  is set (warning only if that hooks directory lacks a `prepare-commit-msg`
+  hook referencing `Attn-Session:`), and a warning on every landing when
+  another `prepare-commit-msg` is there without `Attn-Session:`.
 
 ## How to get to it
 

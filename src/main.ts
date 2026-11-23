@@ -15,12 +15,23 @@ import { version } from "../package.json"
 const help = `land lands finished commits on main: it rebases onto origin/main, runs the
 gate that land.toml names, and pushes main with the landing ref, refs/landings/<head>.
 
-Usage:
+Landing:
   land                 land the commits of the current branch, with the note in
                        .land/note.md when there is one
   land --note <file>   land them with the note in <file>
   land init            adopt land in this repository: write land.toml and the trunk declaration
   land record [args]   run the record command, and print a markdown line for each recording it made
+
+Review, feed & bugs:
+  land show <sha|url>  fetch the markdown review bundle (note, comments, bugs) from the feed
+  land comments [<sha|url>] [--open] [--json]
+                       list human review comments for a landing or the repository
+  land comments resolve <id> [--by <sha>]
+                       mark a review comment resolved
+  land review check <file> [--base <sha>] [--head <sha>]
+                       validate a review document (stops, line ranges, diagrams, file coverage)
+  land brief <sha> <file> [--base <sha>] [--no-check]
+                       validate and push a review document to refs/land-events/ for the feed
   land event <sha> --kind <kind> --state pass|fail|run|info --title <title>
              [--url <url>] [--detail-file <file>] [--repairs <sha>]
                        push an event about the landing <sha> to refs/land-events/, and tell the feed
@@ -29,17 +40,10 @@ Usage:
                        register a bug attributed to commit <sha>
   land bugs [--open] [--since <Nd|ISO>] [--path <prefix>] [--severity p0|p1|p2] [--json]
                        list bugs registered for this repository on the feed
-  land show <sha|url>  fetch the LLM-ready markdown review bundle (note, comments, bugs) from the feed
-  land comments [<sha|url>] [--open] [--json]
-                       list human review comments for a landing or the repository
-  land comments resolve <id> [--by <sha>]
-                       mark a review comment resolved
-  land review check <file> [--base <sha>] [--head <sha>]
-                       validate a review document (stops, line ranges, diagrams, file coverage)
-  land brief <sha> <file> [--no-check]
-                       validate and push a review document to refs/land-events/ for the feed
   land auth token <token|-> | status | logout
                        manage the land-feed API token (~/.config/land/token or LAND_FEED_TOKEN)
+
+Guides & info:
   land guide           print the procedure for landing a change
   land guide review    print the procedure for reviewing what landed on main
   land guide sheriff   print the procedure for getting main's CI green
@@ -55,6 +59,7 @@ waits in the outbox, $XDG_STATE_HOME/land/outbox, and every later land sends it.
 land.toml, at the repository root:
   gate = "bun run check"   a shell command; land pushes only when it exits 0
   main = "main"            the branch to land on; "main" when absent
+  resolve = "<command>"    a shell command run on rebase conflicts; exit 0 stages the fix and continues
   feed = "<url>"           the feed that shows landings and hosts their recordings
   record = "<command>"     a shell command that writes recordings into $LAND_MEDIA, which is
                            .land/media/; land record runs it at the repository root with its

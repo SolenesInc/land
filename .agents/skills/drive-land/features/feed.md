@@ -46,7 +46,7 @@ the outbox: <why>`. It needs the `feed` key and a GitHub origin. A bad
   is set) via `refs/land-events/`; `land bugs` queries the feed's bug list.
 - `feed-review` is `land auth token|status|logout`, `land show <sha|url>`,
   `land comments [<sha|url>] [--open] [--json]`, `land comments resolve <id> [--by <sha>]`,
-  `land review check <file>`, and `land brief <sha> <file>`. `land brief`
+  `land review check <file>`, and `land brief <sha> <file> [--base <sha>] [--no-check]`. `land brief`
   validates the review document against git and pushes a `kind: "review-doc"`
   event to `refs/land-events/`.
 

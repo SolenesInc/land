@@ -36,10 +36,14 @@ was.
 - `land-author` refuses a commit whose author is not the global git identity,
   and names it.
 - `land-conflict` aborts a rebase that conflicts, names the files, and leaves
-  the branch as it was.
+  the branch as it was. When `land.toml` names a `resolve` command, `land`
+  runs it first and continues the rebase if it exits 0 with no unmerged files
+  remaining.
 - `land-rebase-in-progress` refuses while a rebase is in progress.
 - `land-main-moved` rebases and pushes without running the gate again when
   `main` moved while the gate ran, and names the commit the gate ran on.
+- `land-undo-warn` warns on stderr after pushing when the landing completely
+  undoes one or more of the last 30 commits on `main`, and names them.
 - `land-side-by-side` lets lands from several worktrees of one clone run at
   once.
 - `land-killed` leaves nothing behind that stops the next land, when a land is
