@@ -19,6 +19,9 @@ Landing:
   land                 land the commits of the current branch, with the note in
                        .land/note.md when there is one
   land --note <file>   land them with the note in <file>
+  land --ack-flake <test> --owner <ref>
+                       re-run after a gate failure on an unchanged diff once the
+                       flake is diagnosed and tracked by <ref> (or fixed on main)
   land init            adopt land in this repository: write land.toml and the trunk declaration
   land record [args]   run the record command, and print a markdown line for each recording it made
 
@@ -78,6 +81,56 @@ const report = async (command: Effect.Effect<void, LandFailed>) => {
   return failure.error.status ?? 1
 }
 
+type ParsedLandArgs =
+  | { readonly kind: "ok"; readonly options: Parameters<typeof land>[0] }
+  | { readonly kind: "error"; readonly message: string }
+  | { readonly kind: "unknown" }
+
+const missingValue = (value: string | undefined) => value === undefined || value.trim() === "" || value.startsWith("-")
+
+const parseLandArgs = (args: ReadonlyArray<string>): ParsedLandArgs => {
+  let note: string | undefined
+  let ackFlake: string | undefined
+  let owner: string | undefined
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]
+    const next = args[i + 1]
+    if (arg === "--note") {
+      if (note !== undefined) return { kind: "error", message: "--note may only be passed once" }
+      if (next === undefined || next === "" || next.startsWith("-"))
+        return { kind: "error", message: "--note requires a file path" }
+      note = next
+      i += 1
+    } else if (arg === "--ack-flake") {
+      if (ackFlake !== undefined) return { kind: "error", message: "--ack-flake may only be passed once" }
+      if (missingValue(next)) return { kind: "error", message: "--ack-flake requires a test name" }
+      ackFlake = next!.trim()
+      i += 1
+    } else if (arg === "--owner") {
+      if (owner !== undefined) return { kind: "error", message: "--owner may only be passed once" }
+      if (missingValue(next))
+        return { kind: "error", message: "--owner requires a tracking seed, issue, or fix commit" }
+      owner = next!.trim()
+      i += 1
+    } else {
+      return { kind: "unknown" }
+    }
+  }
+  if (ackFlake !== undefined && owner === undefined) {
+    return { kind: "error", message: "--ack-flake requires --owner <seed-issue-or-sha>" }
+  }
+  if (owner !== undefined && ackFlake === undefined) {
+    return { kind: "error", message: "--owner requires --ack-flake <test>" }
+  }
+  return {
+    kind: "ok",
+    options: {
+      ...(note === undefined ? {} : { note }),
+      ...(ackFlake !== undefined && owner !== undefined ? { ackFlake: { test: ackFlake, owner } } : {}),
+    },
+  }
+}
+
 const main = async (args: ReadonlyArray<string>) => {
   if (args[0] === "record") return report(record(args.slice(1)))
   if (args[0] === "event") return report(event(args.slice(1)))
@@ -88,7 +141,6 @@ const main = async (args: ReadonlyArray<string>) => {
   if (args[0] === "review") return report(review(args.slice(1)))
   if (args[0] === "brief") return report(brief(args.slice(1)))
   if (args[0] === "auth") return report(auth(args.slice(1)))
-  if (args.length === 2 && args[0] === "--note") return report(land({ note: args[1] }))
   switch (args.join(" ")) {
     case "":
       return report(land({}))
@@ -111,9 +163,16 @@ const main = async (args: ReadonlyArray<string>) => {
     case "--version":
       console.log(`land ${version}`)
       return 0
-    default:
+    default: {
+      const parsed = parseLandArgs(args)
+      if (parsed.kind === "ok") return report(land(parsed.options))
+      if (parsed.kind === "error") {
+        process.stderr.write(`land: ${parsed.message}\n`)
+        return 2
+      }
       process.stderr.write(`land: unknown arguments: ${args.join(" ")}\n\n${help}`)
       return 2
+    }
   }
 }
 

@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises"
 import { constants, tmpdir } from "node:os"
 import { isAbsolute, join } from "node:path"
 import { Effect } from "effect"
@@ -298,12 +298,115 @@ const warnUndoneCommits = (root: string, main: string, base: string, head: strin
     )
   }).pipe(Effect.catch(() => Effect.void))
 
+const failureRetentionMs = 7 * 24 * 60 * 60 * 1000
+const signalExitCodes = new Set([129, 130, 131, 137, 143])
+
+type GateFailureRecord = {
+  readonly command: string
+  readonly status: number
+  readonly base: string
+  readonly head: string
+  readonly failedAt: string
+}
+
+const patchIdForDiff = (root: string, base: string, head: string) =>
+  Effect.promise(async () => {
+    const diff = await rawGit(root, [
+      "diff-tree",
+      "-r",
+      "-p",
+      "--full-index",
+      "--no-renames",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--no-color",
+      "--src-prefix=a/",
+      "--dst-prefix=b/",
+      base,
+      head,
+    ])
+    if (diff.status !== 0) return head
+    if (diff.out.byteLength === 0) return "empty-diff"
+    const patched = await rawGit(root, ["patch-id", "--verbatim"], undefined, diff.out)
+    if (patched.status !== 0) return head
+    const patchId = new TextDecoder().decode(patched.out).trim().split(/\s+/)[0] ?? ""
+    const structural: string[] = []
+    let lastIndex = ""
+    for (const line of new TextDecoder().decode(diff.out).split("\n")) {
+      if (
+        line.startsWith("diff --git ") ||
+        line.startsWith("old mode ") ||
+        line.startsWith("new mode ") ||
+        line.startsWith("new file mode ") ||
+        line.startsWith("deleted file mode ")
+      ) {
+        structural.push(line)
+        if (line.startsWith("diff --git ")) lastIndex = ""
+      } else if (line.startsWith("index ")) {
+        lastIndex = line
+      } else if (line.startsWith("Binary files ") && line.endsWith(" differ")) {
+        if (lastIndex !== "") structural.push(lastIndex)
+        structural.push(line)
+      }
+    }
+    const hasher = new Bun.CryptoHasher("sha256")
+    hasher.update(patchId)
+    hasher.update("\0")
+    hasher.update(structural.join("\n"))
+    return hasher.digest("hex")
+  })
+
+const failurePath = (commonDir: string, patchId: string) => join(commonDir, "land-failures", `${patchId}.json`)
+
+const readGateFailure = (commonDir: string, patchId: string) =>
+  Effect.promise(async (): Promise<GateFailureRecord | undefined> => {
+    const path = failurePath(commonDir, patchId)
+    const file = Bun.file(path)
+    if (!(await file.exists())) return undefined
+    try {
+      const parsed = JSON.parse(await file.text()) as Partial<GateFailureRecord>
+      if (
+        typeof parsed.command === "string" &&
+        typeof parsed.status === "number" &&
+        typeof parsed.base === "string" &&
+        typeof parsed.head === "string" &&
+        typeof parsed.failedAt === "string"
+      ) {
+        return parsed as GateFailureRecord
+      }
+    } catch {
+      return undefined
+    }
+    return undefined
+  })
+
+const recordGateFailure = (commonDir: string, patchId: string, record: GateFailureRecord) =>
+  Effect.promise(async () => {
+    await mkdir(join(commonDir, "land-failures"), { recursive: true })
+    await writeFile(failurePath(commonDir, patchId), `${JSON.stringify(record, null, 2)}\n`)
+  })
+
+const clearGateFailure = (commonDir: string, patchId: string) =>
+  Effect.promise(async () => {
+    await rm(failurePath(commonDir, patchId), { force: true })
+    const dir = join(commonDir, "land-failures")
+    const entries = await readdir(dir).catch(() => [])
+    const cutoff = Date.now() - failureRetentionMs
+    for (const entry of entries) {
+      const full = join(dir, entry)
+      const info = await stat(full).catch(() => undefined)
+      if (info !== undefined && info.mtimeMs < cutoff) {
+        await rm(full, { force: true }).catch(() => undefined)
+      }
+    }
+  })
+
 const duration = (ms: number) => {
   const seconds = Math.round(ms / 1000)
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`
 }
 
-const runGate = (gate: string, root: string, base: string, head: string) =>
+const runGate = (gate: string, root: string, base: string, head: string, commonDir: string, patchId: string) =>
   Effect.gen(function* () {
     const started = Date.now()
     const { status, signal } = yield* Effect.promise(async () => {
@@ -321,6 +424,15 @@ const runGate = (gate: string, root: string, base: string, head: string) =>
       return ms / 1000
     }
     const exit = status ?? 128 + (typeof signal === "string" ? constants.signals[signal] : (signal ?? 0))
+    if (signal === null && status !== null && !signalExitCodes.has(status)) {
+      yield* recordGateFailure(commonDir, patchId, {
+        command: gate,
+        status: exit,
+        base,
+        head,
+        failedAt: new Date().toISOString(),
+      })
+    }
     return yield* new LandFailed({
       message: `gate   ${gate}   failed with status ${exit}; nothing was pushed`,
       status: exit,
@@ -342,9 +454,13 @@ const landingCommit = (record: LandingRecord, note: string | undefined) =>
     return yield* gitOk("commit-tree", tree, "-m", `Landing ${record.head}`)
   })
 
-export const land = (options: { readonly note?: string }) =>
+export const land = (options: {
+  readonly note?: string
+  readonly ackFlake?: { readonly test: string; readonly owner: string }
+}) =>
   Effect.gen(function* () {
     const root = yield* gitOk("rev-parse", "--show-toplevel")
+    const commonDir = yield* gitOk("rev-parse", "--path-format=absolute", "--git-common-dir")
     const declaration = yield* readDeclaration(root)
     const main = declaration.main ?? "main"
     yield* excludeLandDir
@@ -384,14 +500,32 @@ Commit, remove or ignore them, then run land again.`,
     if ((yield* gitOk("rev-list", "--count", `${landRef(main)}..HEAD`)) === "0") return yield* say("nothing to land")
     yield* installHooks(main, root)
 
+    const checked = yield* gitOk("rev-parse", "HEAD")
+    const checkedBase = yield* gitOk("rev-parse", landRef(main))
+    const patchId = yield* patchIdForDiff(root, checkedBase, checked)
+
+    if (declaration.gate !== undefined) {
+      const priorFailure = yield* readGateFailure(commonDir, patchId)
+      if (priorFailure !== undefined && options.ackFlake === undefined) {
+        return yield* new LandFailed({
+          message: `the gate already failed on this unchanged diff (exit ${priorFailure.status} on base ${priorFailure.base.slice(0, 7)} at ${priorFailure.failedAt}); refusing to re-run without changes.
+Diagnose the failure first with a paired check on HEAD and origin/${main}, and fix it if you caused or worsened it.
+If it is a verified pre-existing flake with an active owner, or fixed by a newer commit on ${main}, re-run with:
+  land --ack-flake <test> --owner <seed-issue-or-sha>`,
+        })
+      }
+    }
+
     if (note !== undefined) {
       const count = media!.recordings.length
       yield* say(`note   ${note.shown}${count === 0 ? "" : `, ${plural(count)}`}`)
     }
-    const checked = yield* gitOk("rev-parse", "HEAD")
+    if (options.ackFlake !== undefined) {
+      yield* say(`flake  ${options.ackFlake.test} (owner ${options.ackFlake.owner})`)
+    }
     let gate: LandingRecord["gate"]
     if (declaration.gate !== undefined) {
-      const seconds = yield* runGate(declaration.gate, root, yield* gitOk("rev-parse", landRef(main)), checked)
+      const seconds = yield* runGate(declaration.gate, root, checkedBase, checked, commonDir, patchId)
       gate = { command: declaration.gate, seconds, ranOn: checked }
     }
 
@@ -411,6 +545,7 @@ Commit, remove or ignore them, then run land again.`,
         base: yield* gitOk("rev-parse", landRef(main)),
         head,
         ...(gate === undefined ? {} : { gate }),
+        ...(options.ackFlake === undefined ? {} : { acknowledgedFlake: options.ackFlake }),
         recordings: listed(media?.recordings ?? []),
       }
       const landing = yield* landingCommit(record, media?.text)
@@ -422,6 +557,7 @@ Commit, remove or ignore them, then run land again.`,
         { LAND_LANDING: "1" },
       )
       if (pushed.status === 0) {
+        yield* clearGateFailure(commonDir, patchId)
         yield* advanceTracking(main, head)
         yield* say(`push   ${main} is at ${yield* short(head)}`)
         if (media?.at !== undefined) yield* uploadRecordings(root, declaration.feed!, media.at, head, media.recordings)

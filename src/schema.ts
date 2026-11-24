@@ -15,6 +15,12 @@ export const LandingRecord = Schema.Struct({
       ranOn: Schema.String, // differs from head when main moved after the gate
     }),
   ),
+  acknowledgedFlake: Schema.optionalKey(
+    Schema.Struct({
+      test: Schema.String,
+      owner: Schema.String,
+    }),
+  ),
   // The recordings the note links, which the feed may accept for this landing.
   recordings: Schema.Array(
     Schema.Struct({

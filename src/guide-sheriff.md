@@ -12,7 +12,9 @@ workflows and who to ask. Where the two disagree, `.agents/land/sheriff.md`
 wins.
 
 Never re-run CI, a failed job or a whole run. A re-run that passes shows only
-that the failure is intermittent, not why.
+that the failure is intermittent, not why. An intermittent failure that turned
+green on a later push still gets a root-cause fix and an owner: leaving it
+unowned forces later landings to hit and retry it.
 
 ## What your runner provides
 

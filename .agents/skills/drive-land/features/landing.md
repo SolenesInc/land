@@ -29,7 +29,14 @@ was.
   sits on, and `LAND_HEAD`, the commit it pushes.
 - `land-nothing` prints `nothing to land` when the branch has nothing ahead of
   `main`.
-- `land-gate-fails` pushes nothing and exits with the gate's status.
+- `land-gate-fails` pushes nothing, records the failure against the diff's
+  patch-id under `<git-common-dir>/land-failures/`, and exits with the gate's
+  status.
+- `land-retry-guard` refuses to re-run the gate on the same unchanged diff
+  (even after a rebase onto a newer `main`) unless the caller changes the diff
+  or passes `--ack-flake <test> --owner <ref>`, which prints
+  `land: flake  <test> (owner <ref>)` and writes `acknowledgedFlake` into
+  `landing.json`. A gate killed by a signal writes no failure record.
 - `land-untracked` refuses while the worktree holds an untracked file that git
   does not ignore, and names it.
 - `land-uncommitted` refuses while a tracked file has uncommitted changes.
@@ -57,6 +64,9 @@ was.
   `src/landing.ts`).
 - Run `land --note <file>` to land with a note kept outside `.land/`
   (`src/main.ts`, `src/note.ts`).
+- Run `land --ack-flake <test> --owner <ref>` to re-run after a gate failure on
+  an unchanged diff once the flake is diagnosed and tracked by `<ref>`
+  (`src/main.ts`, `src/landing.ts`).
 
 ### Agents
 
@@ -161,7 +171,10 @@ Preconditions:
   holds landing.json alone", "land --note lands the note in the file it names",
   "land --note with no such file pushes nothing", "a failing gate keeps the
   note and pushes no landing ref", "land adds .land/ to the clone's exclude
-  once, for every worktree".
+  once, for every worktree", "land refuses to re-run a failed gate on an
+  unchanged diff until the diff changes or --ack-flake and --owner are passed",
+  "land failure guard ignores signal-killed gates and user diff.external config",
+  "land rejects invalid, duplicate, or unpaired --ack-flake and --owner flags".
 
 ## Gotchas
 

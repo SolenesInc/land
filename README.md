@@ -40,6 +40,11 @@ clones do not fetch landing refs; inspect one with
   worktrees of one clone can land side by side. When `main` moves while the
   gate runs, `land` rebases and pushes without rerunning the gate, naming the
   commit the gate ran on.
+- **Unchanged-diff failure guard:** when the gate exits non-zero, `land`
+  records the failure against the diff's patch-id (surviving rebases onto a
+  moved `main`) and refuses to re-run the gate on the same unchanged diff until
+  you change the diff or pass `--ack-flake <test> --owner <ref>`, which is
+  recorded in `landing.json`.
 - **Undone-commit warning:** after pushing, compares the landing against the
   last 30 commits on `main` touching the same files and warns if the landing
   completely undid an earlier commit.

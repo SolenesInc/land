@@ -1,5 +1,14 @@
 import { afterEach, beforeAll, expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { stubFeed } from "./stub-feed.ts"
@@ -1256,4 +1265,114 @@ test("land brief --base validates a multi-commit landing", async () => {
   expect(briefed.status).toBe(0)
   expect(briefed.out).toContain(`land: brief  refs/land-events/${head}/`)
   feed.stop()
+})
+
+test("land refuses to re-run a failed gate on an unchanged diff until the diff changes or --ack-flake and --owner are passed", async () => {
+  const w = world()
+  const lander = w.clone("lander")
+  const other = w.clone("other")
+  w.commit(lander, "story.txt", "two\n")
+
+  // First attempt fails in the gate and records the patch-id failure.
+  const first = await w.land(lander, "exit 3")
+  expect(first.status).toBe(3)
+
+  // Re-running on the same unchanged diff is refused before invoking the gate.
+  const gateRanFile = join(w.dir, "gate-ran")
+  const retry = await w.land(lander, `echo ran > "${gateRanFile}"`)
+  expect(retry.status).toBe(1)
+  expect(retry.err).toContain("already failed on this unchanged diff")
+  expect(retry.err).toContain("--ack-flake")
+  expect(existsSync(gateRanFile)).toBe(false)
+
+  // Moving main and rebasing with the same diff still refuses.
+  w.commit(other, "other.txt", "unrelated\n")
+  w.git(other, "push", "--quiet", "origin", "HEAD:main")
+  const retryAfterMainMoved = await w.land(lander, `echo ran > "${gateRanFile}"`)
+  expect(retryAfterMainMoved.status).toBe(1)
+  expect(retryAfterMainMoved.err).toContain("already failed on this unchanged diff")
+  expect(existsSync(gateRanFile)).toBe(false)
+
+  // Explicit --ack-flake + --owner runs the gate, pushes, and records acknowledgedFlake in landing.json.
+  const acked = await w.start(lander, `echo ran > "${gateRanFile}"`, {}, [
+    "--ack-flake",
+    "TestFlakyCase",
+    "--owner",
+    "s-abc123",
+  ]).result
+  expect(acked).toMatchObject({ status: 0, err: "" })
+  expect(existsSync(gateRanFile)).toBe(true)
+  expect(acked.out).toContain("land: flake  TestFlakyCase (owner s-abc123)")
+  const head = w.main()
+  expect(w.landing(head).record.acknowledgedFlake).toEqual({ test: "TestFlakyCase", owner: "s-abc123" })
+
+  // A new change whose gate fails is unblocked as soon as the diff changes, including mode-only fixes.
+  w.commit(lander, "story.txt", "three\n")
+  expect((await w.land(lander, "exit 2")).status).toBe(2)
+  chmodSync(join(lander, "story.txt"), 0o755)
+  w.git(lander, "add", "story.txt")
+  w.git(lander, "commit", "--quiet", "-m", "Make story executable")
+  expect(await w.land(lander, "true")).toMatchObject({ status: 0, err: "" })
+})
+
+test("land failure guard ignores signal-killed gates and user diff.external config", async () => {
+  const w = world()
+  const lander = w.clone("lander")
+  const other = w.clone("other")
+  writeFileSync(
+    join(w.dir, "gitconfig"),
+    "[user]\n\tname = Lander\n\temail = lander@example.com\n[init]\n\tdefaultBranch = main\n[diff]\n\texternal = false\n[color]\n\tui = always\n",
+  )
+  w.commit(lander, "story.txt", "two\n")
+
+  // A gate killed by SIGTERM (via sh -c returning 143) records no failure, so retry succeeds.
+  const killed = await w.land(lander, "sh -c 'kill -TERM $$'")
+  expect(killed.status).toBe(143)
+  const afterKill = await w.land(lander, "exit 4")
+  expect(afterKill.status).toBe(4)
+
+  // Despite diff.external = false and color.ui = always, patch-id still catches unchanged retries after rebase.
+  w.commit(other, "other.txt", "unrelated\n")
+  w.git(other, "push", "--quiet", "origin", "HEAD:main")
+  const retry = await w.land(lander, "true")
+  expect(retry.status).toBe(1)
+  expect(retry.err).toContain("already failed on this unchanged diff")
+})
+
+test("land rejects invalid, duplicate, or unpaired --ack-flake and --owner flags", async () => {
+  const w = world()
+  const lander = w.clone("lander")
+  w.commit(lander, "story.txt", "two\n")
+
+  const missingOwner = await w.start(lander, "true", {}, ["--ack-flake", "TestFoo"]).result
+  expect(missingOwner.status).toBe(2)
+  expect(missingOwner.err).toContain("--ack-flake requires --owner")
+
+  const missingFlake = await w.start(lander, "true", {}, ["--owner", "s-abc123"]).result
+  expect(missingFlake.status).toBe(2)
+  expect(missingFlake.err).toContain("--owner requires --ack-flake")
+
+  const swallowedFlag = await w.start(lander, "true", {}, ["--ack-flake", "--owner", "s-abc123"]).result
+  expect(swallowedFlag.status).toBe(2)
+  expect(swallowedFlag.err).toContain("--ack-flake requires a test name")
+
+  const doubleSwallowed = await w.start(lander, "true", {}, ["--ack-flake", "--owner", "--owner", "s-abc123"]).result
+  expect(doubleSwallowed.status).toBe(2)
+  expect(doubleSwallowed.err).toContain("--ack-flake requires a test name")
+
+  const duplicateFlag = await w.start(lander, "true", {}, [
+    "--ack-flake",
+    "TestA",
+    "--ack-flake",
+    "TestB",
+    "--owner",
+    "s-abc123",
+  ]).result
+  expect(duplicateFlag.status).toBe(2)
+  expect(duplicateFlag.err).toContain("--ack-flake may only be passed once")
+
+  const noteSwallowed = await w.start(lander, "true", {}, ["--note", "--ack-flake", "TestFoo", "--owner", "s-abc123"])
+    .result
+  expect(noteSwallowed.status).toBe(2)
+  expect(noteSwallowed.err).toContain("--note requires a file path")
 })
