@@ -180,7 +180,11 @@ Preconditions:
   once, for every worktree", "land refuses to re-run a failed gate on an
   unchanged diff until the diff changes or --ack-flake and --owner are passed",
   "land failure guard ignores signal-killed gates and user diff.external config",
-  "land rejects invalid, duplicate, or unpaired --ack-flake and --owner flags".
+  "land rejects invalid, duplicate, or unpaired --ack-flake and --owner flags",
+  "a note that git tracks is refused, because land would delete it", "land warns
+  after pushing when a landing undoes an earlier commit on main", "resolve in
+  land.toml resolves generated-file rebase conflicts and aborts on real
+  conflicts".
 
 ## Gotchas
 

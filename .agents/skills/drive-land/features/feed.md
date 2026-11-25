@@ -51,7 +51,7 @@ the outbox: <why>`. It needs the `feed` key and a GitHub origin. A bad
   into `landing.json`'s `fixesBugs` and prints `land: fixes  <ids>` on push.
 - `feed-review` is `land auth token|status|logout`, `land show <sha|url>`,
   `land comments [<sha|url>] [--open] [--json]`, `land comments resolve <id> [--by <sha>]`,
-  `land review check <file>`, and `land brief <sha> <file> [--base <sha>] [--no-check]`. `land brief`
+  `land review check <file> [--base <sha>] [--head <sha>]`, and `land brief <sha> <file> [--base <sha>] [--no-check]`. `land brief`
   validates the review document against git and pushes a `kind: "review-doc"`
   event to `refs/land-events/`.
 
@@ -120,19 +120,22 @@ Preconditions:
   shows the envelope. Run the same `land event` with `do` instead of `feed`:
   the notice waits in the outbox, and the next `drive.ts r feed lander land`
   prints `land: outbox 1 sent`.
-- **Refusals.** Run
-  `drive.ts r do lander 'printf "![gone](.land/media/gone.mp4)\n" > .land/note.md && echo four >> story.txt && git commit -qam "Fourth" && land'`:
-  `land: the note .land/note.md links .land/media/gone.mp4, and there is no such file; nothing was pushed`,
-  exit 1, no gate line. Then remove the `feed` line from `land.toml`, commit,
-  link an existing `.land/media/shot.png`, and run `land`: it names the
-  missing `feed` key and exits 1.
 - **Bug & review.** Run
   `drive.ts r feed lander 'land bug $(git rev-parse --short HEAD) --title "null crash" --severity p0 --location story.txt:1 && land bugs --open'`
   (prints `land: bug    refs/land-events/<head>/<id> pushed; the feed has it`, `land: id     <short-id>`, and lists the P0 bug with its short id).
-  Land a fix with `Fixes-Bug: <short-id>` in its commit trailer block (or `land --fixes <short-id>`): `land` prints `land: fixes  <short-id>` and writes `fixesBugs` to `landing.json`.
-  Or close an existing bug retroactively with `land bug resolve <short-id> --by <fix-sha>`.
   Run `drive.ts r feed lander 'printf -- "---\nland: review\nframe: walkthrough\n---\n\n# Update\n\nAdds line.\n\n## Step\n\n### story.txt:1-2\n\n- L2!: Look here.\n" > ../rev.md && land review check ../rev.md && land brief $(git rev-parse --short HEAD) ../rev.md && land show $(git rev-parse --short HEAD)'`
   (prints `land: review ok`, `land: brief  refs/land-events/<head>/<id> pushed; the feed has it`, and the markdown bundle).
+  Land a fix with the short id in its trailer block:
+  `drive.ts r feed lander 'echo five >> story.txt && git commit -qam "Fix the null crash" -m "Fixes-Bug: <short-id>" && land'`
+  (or `land --fixes <short-id>`): `land` prints `land: fixes  <short-id>` and writes `fixesBugs` to `landing.json`.
+  Or close an existing bug retroactively with `land bug resolve <short-id> --by <fix-sha>`.
+- **Refusals.** Run
+  `drive.ts r do lander 'printf "![gone](.land/media/gone.mp4)\n" > .land/note.md && echo four >> story.txt && git commit -qam "Fourth" && land'`:
+  `land: the note .land/note.md links .land/media/gone.mp4, and there is no such file; nothing was pushed`,
+  exit 1, no gate line. Then run
+  `drive.ts r do lander 'sed -i.bak "/^feed/d" land.toml && rm land.toml.bak && git commit -qam "No feed key" && mkdir -p .land/media && echo shot > .land/media/shot.png && printf "![shot](.land/media/shot.png)\n" > .land/note.md && land'`:
+  it names the missing `feed` key and exits 1. Both commits stay unlanded and
+  `feed` is gone from `land.toml`, so this step comes last.
 - **Proof.** The saved output of each `land` and `land event`, the feed
   requests in the evidence, the landing ref's `landing.json` and `note.md`,
   the event ref's `event.json`, and the outbox listings.
@@ -157,7 +160,16 @@ Preconditions:
   uploads the file, keeps it, and leaves the code as written", "a feed that
   refuses the recording and the event, as one without the App does, drops
   them with why, and land still succeeds", "land event pushes refs/land-events/<sha>/<id> holding the event, notifies the
-  feed, and keeps the notice in the outbox when the feed is down".
+  feed, and keeps the notice in the outbox when the feed is down", "land bug
+  prints a short id, --fixed-by closes only that bug, Fixes-Bug trailers and
+  --fixes close on land, and land bug resolve closes retroactively",
+  "parseFixesBugTrailers reads only the git trailer paragraph and handles
+  prefixes, lists and case", "land auth, show, comments, review check and brief
+  work end-to-end against the feed", "land brief --base validates a
+  multi-commit landing".
+- `test/review-doc.test.ts`: "parses valid map review document with
+  before/after flows, stops, notes, and coverage", "reports missing file
+  coverage, out-of-range notes, and undrawable mermaid lines".
 
 ## Gotchas
 
@@ -171,3 +183,5 @@ Preconditions:
   `note.md` from the landing ref on `origin.git`, never the worktree.
 - The outbox lives in `$HOME`, which the world owns, so a drive never touches
   the lander's real outbox.
+- The stub holds the bugs of one command. `land bugs` in a later
+  `drive.ts r feed` lists none, so register and list in one command.

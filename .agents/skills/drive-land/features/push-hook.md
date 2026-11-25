@@ -85,7 +85,8 @@ Preconditions:
 ## Tests
 
 - `test/land.test.ts`: "a plain push to main is refused after land has run in
-  the clone".
+  the clone", "core.hooksPath warns only for hooks the repository does not
+  already handle".
 
 ## Gotchas
 
