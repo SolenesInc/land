@@ -37,6 +37,9 @@ was.
   or passes `--ack-flake <test> --owner <ref>`, which prints
   `land: flake  <test> (owner <ref>)` and writes `acknowledgedFlake` into
   `landing.json`. A gate killed by a signal writes no failure record.
+- `land-fixes` collects `Fixes-Bug: <id>` commit trailers in the landed range
+  and any repeatable `land --fixes <id>` flags, writes `fixesBugs` into
+  `landing.json`, and prints `land: fixes  <ids>` after the push.
 - `land-untracked` refuses while the worktree holds an untracked file that git
   does not ignore, and names it.
 - `land-uncommitted` refuses while a tracked file has uncommitted changes.
@@ -64,6 +67,9 @@ was.
   `src/landing.ts`).
 - Run `land --note <file>` to land with a note kept outside `.land/`
   (`src/main.ts`, `src/note.ts`).
+- Run `land --fixes <id>` (repeatable) or include `Fixes-Bug: <id>` in a
+  commit's trailer block to mark registered bugs fixed by this landing
+  (`src/main.ts`, `src/landing.ts`, `src/schema.ts`).
 - Run `land --ack-flake <test> --owner <ref>` to re-run after a gate failure on
   an unchanged diff once the flake is diagnosed and tracked by `<ref>`
   (`src/main.ts`, `src/landing.ts`).

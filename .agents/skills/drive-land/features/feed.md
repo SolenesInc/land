@@ -40,10 +40,15 @@ lander's machine, and the next `land` sends it.
   `land: event  <ref> pushed; the feed has it`, or `...; the notice waits in
 the outbox: <why>`. It needs the `feed` key and a GitHub origin. A bad
   `--state` or a missing flag exits 2.
-- `feed-bug` is `land bug <sha> --title [--severity] [--source] [--location] [--detail-file] [--fixed-by] [--url]`
-  and `land bugs [--open] [--since] [--path] [--severity] [--json]`. `land bug`
-  pushes a `kind: "bug"` event (and an optional `repair` event when `--fixed-by`
-  is set) via `refs/land-events/`; `land bugs` queries the feed's bug list.
+- `feed-bug` is `land bug <sha> --title [--severity] [--source] [--location] [--detail-file] [--fixed-by] [--url]`,
+  `land bug resolve <id> --by <fix-sha> [--title]`, and
+  `land bugs [--open] [--since] [--path] [--severity] [--json]`. `land bug`
+  pushes a `kind: "bug"` event via `refs/land-events/`, prints `land: id <short-id>`,
+  and when `--fixed-by` is set pushes a bug-specific `repair` event (`fixesBug`).
+  `land bug resolve` pushes a bug-specific `repair` event for an already-landed fix.
+  `land bugs` queries the feed's bug list and prints each bug's short id.
+  `land` also collects `Fixes-Bug: <id>` commit trailers and `--fixes <id>` flags
+  into `landing.json`'s `fixesBugs` and prints `land: fixes  <ids>` on push.
 - `feed-review` is `land auth token|status|logout`, `land show <sha|url>`,
   `land comments [<sha|url>] [--open] [--json]`, `land comments resolve <id> [--by <sha>]`,
   `land review check <file>`, and `land brief <sha> <file> [--base <sha>] [--no-check]`. `land brief`
@@ -123,7 +128,9 @@ Preconditions:
   missing `feed` key and exits 1.
 - **Bug & review.** Run
   `drive.ts r feed lander 'land bug $(git rev-parse --short HEAD) --title "null crash" --severity p0 --location story.txt:1 && land bugs --open'`
-  (prints `land: bug    refs/land-events/<head>/<id> pushed; the feed has it` and lists the P0 bug).
+  (prints `land: bug    refs/land-events/<head>/<id> pushed; the feed has it`, `land: id     <short-id>`, and lists the P0 bug with its short id).
+  Land a fix with `Fixes-Bug: <short-id>` in its commit trailer block (or `land --fixes <short-id>`): `land` prints `land: fixes  <short-id>` and writes `fixesBugs` to `landing.json`.
+  Or close an existing bug retroactively with `land bug resolve <short-id> --by <fix-sha>`.
   Run `drive.ts r feed lander 'printf -- "---\nland: review\nframe: walkthrough\n---\n\n# Update\n\nAdds line.\n\n## Step\n\n### story.txt:1-2\n\n- L2!: Look here.\n" > ../rev.md && land review check ../rev.md && land brief $(git rev-parse --short HEAD) ../rev.md && land show $(git rev-parse --short HEAD)'`
   (prints `land: review ok`, `land: brief  refs/land-events/<head>/<id> pushed; the feed has it`, and the markdown bundle).
 - **Proof.** The saved output of each `land` and `land event`, the feed

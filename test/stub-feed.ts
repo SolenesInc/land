@@ -3,7 +3,7 @@
 // before it answers, and its R2 refuses bytes whose SHA-256 differs from the one the PUT names.
 // The tests and drive.ts both use it.
 
-import type { BugSummary, Event, ReviewComment } from "../src/schema.ts"
+import type { BugSummary, Event, LandingRecord, ReviewComment } from "../src/schema.ts"
 
 export type Request = { method: string; path: string; credential: string | null }
 
@@ -166,12 +166,30 @@ export const stubFeed = (
         const openOnly = url.searchParams.get("open") === "1"
         const severityFilter = url.searchParams.get("severity")
         const pathPrefix = url.searchParams.get("path")
-        const repairs = events.filter((e) => e.body.repairs)
+        const repairs = events.filter((e) => e.body.repairs || e.body.fixesBug)
+        const landingRefs = (read(origin, "for-each-ref", "--format=%(refname)", "refs/landings/") ?? "")
+          .split("\n")
+          .filter(Boolean)
+        const landingFixes: Array<{ head: string; at: string; fixesBug: string }> = []
+        for (const ref of landingRefs) {
+          const rawRecord = read(origin, "show", `${ref}:landing.json`)
+          if (!rawRecord) continue
+          const rec = JSON.parse(rawRecord) as LandingRecord
+          for (const id of rec.fixesBugs ?? []) {
+            landingFixes.push({ head: rec.head, at: new Date().toISOString(), fixesBug: id })
+          }
+        }
         const list: BugSummary[] = events
           .filter((e) => e.owner === owner && e.name === repo && e.body.kind === "bug")
           .map((e) => {
             const culprit = e.body.culprit ?? e.head
-            const fix = repairs.find((r) => culprit.startsWith(r.body.repairs!))
+            const bugSpecific =
+              repairs.find((r) => r.body.fixesBug && e.id.startsWith(r.body.fixesBug)) ??
+              landingFixes.find((f) => e.id.startsWith(f.fixesBug))
+            const commitWide = repairs.find(
+              (r) => !r.body.fixesBug && r.body.repairs && culprit.startsWith(r.body.repairs),
+            )
+            const fix = bugSpecific ?? commitWide
             return {
               source: `ref:${e.id}`,
               owner: e.owner,
@@ -188,7 +206,7 @@ export const stubFeed = (
               at: e.body.at,
               pushedAt: null,
               fixedBy: fix?.head ?? null,
-              fixedAt: fix?.body.at ?? null,
+              fixedAt: fix ? ("body" in fix ? fix.body.at : fix.at) : null,
             }
           })
           .filter((b) => (!openOnly || b.fixedBy === null) && (!severityFilter || b.severity === severityFilter))

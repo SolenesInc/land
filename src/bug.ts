@@ -3,16 +3,20 @@ import { Effect, Schema } from "effect"
 import { feedToken } from "./auth.ts"
 import { feedContext, pushEvent, resolveCommitSha } from "./event.ts"
 import { LandFailed } from "./failure.ts"
-import { BugSummary, Event, type CodeLocation } from "./schema.ts"
+import { bugIdFromSource, BugSummary, Event, normalizeBugId, type CodeLocation } from "./schema.ts"
 
 export const bugUsage = `land bug <culprit-sha> --title <title> [--severity p0|p1|p2]
          [--source agent|review|ci|prod|human] [--location <path[:line]>]
-         [--detail-file <file>] [--fixed-by <sha>] [--url <url>]`
+         [--detail-file <file>] [--fixed-by <sha>] [--url <url>]
+land bug resolve <bug-id> --by <fix-sha> [--title <title>]`
 
 export const bugsUsage = `land bugs [--open] [--since <Nd|ISO>] [--path <prefix>] [--severity p0|p1|p2] [--json]`
 
 const bugFlags = ["title", "severity", "source", "location", "detail-file", "fixed-by", "url"] as const
 type BugFlag = (typeof bugFlags)[number]
+
+const resolveFlags = ["by", "title"] as const
+type ResolveFlag = (typeof resolveFlags)[number]
 
 const parseLocation = (raw: string): Effect.Effect<CodeLocation, LandFailed> => {
   const match = raw.match(/^(.+?)(?::(\d+))?$/)
@@ -26,21 +30,65 @@ const parseLocation = (raw: string): Effect.Effect<CodeLocation, LandFailed> => 
   return Effect.succeed({ path: match[1], ...(line === undefined ? {} : { line }) })
 }
 
+const resolveBug = (args: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const [rawId, ...rest] = args
+    const given: Partial<Record<ResolveFlag, string>> = {}
+    for (let i = 0; i < rest.length; i += 2) {
+      const flag = rest[i]!.replace(/^--/, "") as ResolveFlag
+      const value = rest[i + 1]
+      if (!rest[i]!.startsWith("--") || !resolveFlags.includes(flag) || value === undefined || flag in given) {
+        return yield* new LandFailed({
+          message: `bug resolve: unexpected ${rest[i]}\nUsage:\n  ${bugUsage}`,
+          status: 2,
+        })
+      }
+      given[flag] = value
+    }
+    if (rawId === undefined || rawId.startsWith("--") || !given.by) {
+      return yield* new LandFailed({
+        message: `bug resolve: name the bug id and --by <fix-sha>\nUsage:\n  ${bugUsage}`,
+        status: 2,
+      })
+    }
+    const bugId = normalizeBugId(rawId)
+    if (bugId === undefined) {
+      return yield* new LandFailed({
+        message: `bug resolve: bad bug id ${rawId}; expected 7-40 hex characters`,
+        status: 2,
+      })
+    }
+
+    const { feed, at } = yield* feedContext
+    const fixedBy = yield* resolveCommitSha(given.by, "bug resolve")
+    const repair = yield* Schema.decodeUnknownEffect(Event)({
+      kind: "repair",
+      state: "pass",
+      title: given.title ?? `Fixed bug ${bugId.slice(0, 7)}`,
+      at: new Date().toISOString(),
+      fixesBug: bugId,
+    }).pipe(Effect.mapError((error) => new LandFailed({ message: `bug resolve: ${error.message}`, status: 2 })))
+    yield* pushEvent({ feed, at, landing: fixedBy, body: repair, label: "repair" })
+  })
+
 export const bug = (args: ReadonlyArray<string>) =>
   Effect.gen(function* () {
+    if (args[0] === "resolve") {
+      return yield* resolveBug(args.slice(1))
+    }
     const [sha, ...rest] = args
     const given: Partial<Record<BugFlag, string>> = {}
     for (let i = 0; i < rest.length; i += 2) {
       const flag = rest[i]!.replace(/^--/, "") as BugFlag
       const value = rest[i + 1]
       if (!rest[i]!.startsWith("--") || !bugFlags.includes(flag) || value === undefined || flag in given) {
-        return yield* new LandFailed({ message: `bug: unexpected ${rest[i]}\nUsage: ${bugUsage}`, status: 2 })
+        return yield* new LandFailed({ message: `bug: unexpected ${rest[i]}\nUsage:\n  ${bugUsage}`, status: 2 })
       }
       given[flag] = value
     }
     if (sha === undefined || sha.startsWith("--") || !given.title) {
       return yield* new LandFailed({
-        message: `bug: name the culprit commit and --title\nUsage: ${bugUsage}`,
+        message: `bug: name the culprit commit and --title\nUsage:\n  ${bugUsage}`,
         status: 2,
       })
     }
@@ -71,7 +119,8 @@ export const bug = (args: ReadonlyArray<string>) =>
       ...(detail === undefined ? {} : { detail }),
     }).pipe(Effect.mapError((error) => new LandFailed({ message: `bug: ${error.message}`, status: 2 })))
 
-    yield* pushEvent({ feed, at, landing: culprit, body, label: "bug" })
+    const pushed = yield* pushEvent({ feed, at, landing: culprit, body, label: "bug" })
+    console.log(`land: id     ${pushed.id.slice(0, 7)}`)
 
     if (fixedBy !== undefined) {
       const repair = yield* Schema.decodeUnknownEffect(Event)({
@@ -79,7 +128,7 @@ export const bug = (args: ReadonlyArray<string>) =>
         state: "pass",
         title: `Fixed: ${given.title}`,
         at: new Date().toISOString(),
-        repairs: culprit,
+        fixesBug: pushed.id,
       }).pipe(Effect.mapError((error) => new LandFailed({ message: `bug: ${error.message}`, status: 2 })))
       yield* pushEvent({ feed, at, landing: fixedBy, body: repair, label: "repair" })
     }
@@ -168,10 +217,11 @@ export const bugs = (args: ReadonlyArray<string>) =>
       return
     }
     for (const b of list) {
+      const id = bugIdFromSource(b.source).slice(0, 7)
       const loc = b.location ? ` (${b.location.path}${b.location.line ? `:${b.location.line}` : ""})` : ""
       const status = b.fixedBy ? `fixed in ${b.fixedBy.slice(0, 7)}` : "open"
       console.log(
-        `${b.severity.toUpperCase()}  ${b.culprit.slice(0, 7)}  [${status}]  ${b.title}${loc}  (${b.bugSource}, ${b.at.slice(0, 10)})`,
+        `${id}  ${b.severity.toUpperCase()}  ${b.culprit.slice(0, 7)}  [${status}]  ${b.title}${loc}  (${b.bugSource}, ${b.at.slice(0, 10)})`,
       )
     }
   })

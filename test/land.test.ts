@@ -11,6 +11,7 @@ import {
 } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { parseFixesBugTrailers } from "../src/schema.ts"
 import { stubFeed } from "./stub-feed.ts"
 
 const root = join(import.meta.dir, "..")
@@ -997,17 +998,17 @@ test("a feed that refuses the recording and the event, as one without the App do
   expect(outbox(w)).toEqual([])
 })
 
-test("land bug registers a bug to a culprit commit (with optional --fixed-by) and land bugs queries it", async () => {
+test("land bug prints a short id, --fixed-by closes only that bug, Fixes-Bug trailers and --fixes close on land, and land bug resolve closes retroactively", async () => {
   const w = world()
   const feed = feedOf(w)
   const lander = feedClone(w, feed.url)
   const culprit = w.commit(lander, "story.txt", "buggy\n")
   await w.land(lander)
-  const fix = w.commit(lander, "story.txt", "fixed\n")
+  const earlierFix = w.commit(lander, "story.txt", "partial\n")
   await w.land(lander)
 
   writeFileSync(join(w.dir, "bug.md"), "Repro: trigger concurrent refresh.\n")
-  const reg = await w.start(lander, "true", {}, [
+  const reg1 = await w.start(lander, "true", {}, [
     "bug",
     culprit.slice(0, 7),
     "--title",
@@ -1021,30 +1022,110 @@ test("land bug registers a bug to a culprit commit (with optional --fixed-by) an
     "--detail-file",
     join(w.dir, "bug.md"),
   ]).result
-  expect(reg.status).toBe(0)
-  expect(reg.out).toContain(`land: bug    refs/land-events/${culprit}/`)
-  expect(reg.out).toContain("pushed; the feed has it")
+  expect(reg1.status).toBe(0)
+  expect(reg1.out).toContain(`land: bug    refs/land-events/${culprit}/`)
+  expect(reg1.out).toContain("pushed; the feed has it")
+  const id1Match = reg1.out.match(/land: id\s+([0-9a-f]{7})/)
+  expect(id1Match).not.toBeNull()
+  const id1 = id1Match![1]!
 
-  const listed = await w.start(lander, "true", {}, ["bugs", "--open", "--severity", "p0", "--path", "story.txt"]).result
-  expect(listed.status).toBe(0)
-  expect(listed.out).toContain(`P0  ${culprit.slice(0, 7)}  [open]  refresh race (story.txt:1)`)
-
-  const regWithFix = await w.start(lander, "true", {}, [
+  const reg2 = await w.start(lander, "true", {}, [
     "bug",
     culprit.slice(0, 7),
     "--title",
     "second bug",
+    "--severity",
+    "p1",
+  ]).result
+  expect(reg2.status).toBe(0)
+  const id2 = reg2.out.match(/land: id\s+([0-9a-f]{7})/)![1]!
+
+  const reg3 = await w.start(lander, "true", {}, [
+    "bug",
+    culprit.slice(0, 7),
+    "--title",
+    "third bug",
+    "--severity",
+    "p1",
+  ]).result
+  expect(reg3.status).toBe(0)
+  const id3 = reg3.out.match(/land: id\s+([0-9a-f]{7})/)![1]!
+
+  const listed = await w.start(lander, "true", {}, ["bugs", "--open", "--severity", "p0", "--path", "story.txt"]).result
+  expect(listed.status).toBe(0)
+  expect(listed.out).toContain(`${id1}  P0  ${culprit.slice(0, 7)}  [open]  refresh race (story.txt:1)`)
+
+  // Registering an already-fixed bug on the same culprit closes ONLY that bug, not the other open bugs.
+  const regWithFix = await w.start(lander, "true", {}, [
+    "bug",
+    culprit.slice(0, 7),
+    "--title",
+    "already fixed bug",
     "--fixed-by",
-    fix.slice(0, 7),
+    earlierFix.slice(0, 7),
   ]).result
   expect(regWithFix.status).toBe(0)
   expect(regWithFix.out).toContain("land: bug")
   expect(regWithFix.out).toContain("land: repair")
 
-  const openAfterFix = await w.start(lander, "true", {}, ["bugs", "--open", "--json"]).result
-  expect(openAfterFix.status).toBe(0)
-  expect(JSON.parse(openAfterFix.out)).toEqual([])
+  const openAfterRegWithFix = JSON.parse(
+    (await w.start(lander, "true", {}, ["bugs", "--open", "--json"]).result).out,
+  ) as Array<{ title: string }>
+  expect(openAfterRegWithFix.map((b) => b.title).sort()).toEqual(["refresh race", "second bug", "third bug"])
+
+  // Landing a fix commit with a Fixes-Bug trailer records fixesBugs in landing.json and closes only id1.
+  writeFileSync(join(lander, "story.txt"), "fixed 1\n")
+  w.git(lander, "add", "story.txt")
+  w.git(lander, "commit", "--quiet", "-m", "Fix refresh race", "-m", `Fixes-Bug: ${id1}`)
+  const landedTrailer = await w.land(lander)
+  expect(landedTrailer.status).toBe(0)
+  expect(landedTrailer.out).toContain(`land: fixes  ${id1}`)
+  const head1 = w.main()
+  const rec1 = w.landing(head1).record as { fixesBugs?: string[] }
+  expect(rec1.fixesBugs).toEqual([id1])
+
+  const openAfterTrailer = JSON.parse(
+    (await w.start(lander, "true", {}, ["bugs", "--open", "--json"]).result).out,
+  ) as Array<{ title: string }>
+  expect(openAfterTrailer.map((b) => b.title).sort()).toEqual(["second bug", "third bug"])
+
+  // Landing with --fixes <id2> closes only id2.
+  w.commit(lander, "story.txt", "fixed 2\n")
+  const landedFlag = await w.start(lander, "true", {}, ["--fixes", id2]).result
+  expect(landedFlag.status).toBe(0)
+  expect(landedFlag.out).toContain(`land: fixes  ${id2}`)
+  const openAfterFlag = JSON.parse(
+    (await w.start(lander, "true", {}, ["bugs", "--open", "--json"]).result).out,
+  ) as Array<{ title: string }>
+  expect(openAfterFlag.map((b) => b.title)).toEqual(["third bug"])
+
+  // Invalid --fixes rejects with exit 2 before running the gate.
+  const badFixFlag = await w.start(lander, "true", {}, ["--fixes", "nope"]).result
+  expect(badFixFlag.status).toBe(2)
+  expect(badFixFlag.err).toContain("bad bug id")
+
+  // Retroactively closing id3 with land bug resolve <id3> --by <fix-sha> closes the last open bug.
+  const badResolve = await w.start(lander, "true", {}, ["bug", "resolve", "short", "--by", head1]).result
+  expect(badResolve.status).toBe(2)
+  const resolved = await w.start(lander, "true", {}, ["bug", "resolve", id3, "--by", head1.slice(0, 7)]).result
+  expect(resolved.status).toBe(0)
+  expect(resolved.out).toContain(`land: repair refs/land-events/${head1}/`)
+
+  const openAfterAll = await w.start(lander, "true", {}, ["bugs", "--open", "--json"]).result
+  expect(openAfterAll.status).toBe(0)
+  expect(JSON.parse(openAfterAll.out)).toEqual([])
   feed.stop()
+})
+
+test("parseFixesBugTrailers reads only the git trailer paragraph and handles prefixes, lists and case", () => {
+  expect(parseFixesBugTrailers("Fix foo\n\nMentions Fixes-Bug: 1234567 in body.\n\nAttn-Seed: s-1\n")).toEqual([])
+  expect(parseFixesBugTrailers("Fixes-Bug: 1234567")).toEqual([])
+  expect(
+    parseFixesBugTrailers(
+      "Fix races\n\nBody text.\n\nFixes-Bug: ABCDEF1, ref:1234567890abcdef\nfixes-bug: abcdef1\nAttn-Seed: s-1\n",
+    ),
+  ).toEqual(["abcdef1", "1234567890abcdef"])
+  expect(parseFixesBugTrailers("Doc update\n\nFixes-Bug: <id>\n")).toEqual([])
 })
 
 test("land auth, show, comments, review check and brief work end-to-end against the feed", async () => {

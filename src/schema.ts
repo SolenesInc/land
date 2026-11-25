@@ -21,6 +21,8 @@ export const LandingRecord = Schema.Struct({
       owner: Schema.String,
     }),
   ),
+  // Bug ids this landing closes (from Fixes-Bug: commit trailers and --fixes flags).
+  fixesBugs: Schema.optionalKey(Schema.Array(Schema.String)),
   // The recordings the note links, which the feed may accept for this landing.
   recordings: Schema.Array(
     Schema.Struct({
@@ -52,7 +54,8 @@ export const Event = Schema.Struct({
   at: Schema.String, // ISO time
   url: Schema.optionalKey(Schema.String),
   detail: Schema.optionalKey(Schema.String), // markdown, shown folded (or review document markdown for "review-doc")
-  repairs: Schema.optionalKey(Schema.String), // kind "repair": the sha it repairs
+  repairs: Schema.optionalKey(Schema.String), // kind "repair": the culprit sha it repairs as a whole
+  fixesBug: Schema.optionalKey(Schema.String), // kind "repair": the bug event id (or prefix) it closes
   severity: Schema.optionalKey(BugSeverity), // kind "bug": p0 | p1 | p2
   source: Schema.optionalKey(BugSource), // kind "bug": how the bug was found
   location: Schema.optionalKey(CodeLocation), // kind "bug" / "finding": pinned file:line
@@ -222,3 +225,32 @@ export const BugSummary = Schema.Struct({
   fixedAt: Schema.NullOr(Schema.String),
 })
 export type BugSummary = typeof BugSummary.Type
+
+const bugIdPattern = /^(?:ref:)?([0-9a-f]{7,40})$/i
+
+export const normalizeBugId = (raw: string): string | undefined => {
+  const match = raw.trim().match(bugIdPattern)
+  return match ? match[1]!.toLowerCase() : undefined
+}
+
+export const bugIdFromSource = (source: string): string => (source.startsWith("ref:") ? source.slice(4) : source)
+
+// Extract normalized bug ids from `Fixes-Bug: <id>` lines in a commit message's git trailer paragraph.
+export const parseFixesBugTrailers = (message: string): string[] => {
+  const trimmed = message.trimEnd()
+  if (!trimmed) return []
+  const paragraphs = trimmed.split(/\r?\n[ \t]*\r?\n/)
+  if (paragraphs.length < 2) return []
+  const trailerBlock = paragraphs[paragraphs.length - 1]!
+  const seen = new Set<string>()
+  for (const line of trailerBlock.split(/\r?\n/)) {
+    const match = line.match(/^Fixes-Bug:\s*(.+?)\s*$/i)
+    if (!match) continue
+    for (const token of match[1]!.split(/[\s,]+/)) {
+      if (!token) continue
+      const id = normalizeBugId(token)
+      if (id) seen.add(id)
+    }
+  }
+  return [...seen]
+}

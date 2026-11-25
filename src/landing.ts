@@ -11,7 +11,7 @@ import { excludeLandDir } from "./land-dir.ts"
 import { githubRepository, landingAddress } from "./feed.ts"
 import { listed, plural, readNoteMedia, uploadRecordings } from "./media.ts"
 import { drain } from "./outbox.ts"
-import type { LandingRecord } from "./schema.ts"
+import { parseFixesBugTrailers, type LandingRecord } from "./schema.ts"
 import { version } from "../package.json"
 
 const maxAttempts = 5
@@ -454,9 +454,21 @@ const landingCommit = (record: LandingRecord, note: string | undefined) =>
     return yield* gitOk("commit-tree", tree, "-m", `Landing ${record.head}`)
   })
 
+const collectFixesBugs = (base: string, head: string, explicit: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const log = yield* gitOk("log", "--reverse", "--format=%B%x1e", `${base}..${head}`)
+    const seen = new Set<string>()
+    for (const msg of log.split("\x1e")) {
+      for (const id of parseFixesBugTrailers(msg)) seen.add(id)
+    }
+    for (const id of explicit) seen.add(id)
+    return [...seen]
+  })
+
 export const land = (options: {
   readonly note?: string
   readonly ackFlake?: { readonly test: string; readonly owner: string }
+  readonly fixes?: ReadonlyArray<string>
 }) =>
   Effect.gen(function* () {
     const root = yield* gitOk("rev-parse", "--show-toplevel")
@@ -539,13 +551,16 @@ If it is a verified pre-existing flake with an active owner, or fixed by a newer
         told = true
         yield* warn(`${main} moved after the gate ran on ${yield* short(checked)}; pushing without running it again`)
       }
+      const base = yield* gitOk("rev-parse", landRef(main))
+      const fixesBugs = yield* collectFixesBugs(base, head, options.fixes ?? [])
       const record: LandingRecord = {
         version: 1,
         land: version,
-        base: yield* gitOk("rev-parse", landRef(main)),
+        base,
         head,
         ...(gate === undefined ? {} : { gate }),
         ...(options.ackFlake === undefined ? {} : { acknowledgedFlake: options.ackFlake }),
+        ...(fixesBugs.length === 0 ? {} : { fixesBugs }),
         recordings: listed(media?.recordings ?? []),
       }
       const landing = yield* landingCommit(record, media?.text)
@@ -560,6 +575,7 @@ If it is a verified pre-existing flake with an active owner, or fixed by a newer
         yield* clearGateFailure(commonDir, patchId)
         yield* advanceTracking(main, head)
         yield* say(`push   ${main} is at ${yield* short(head)}`)
+        if (fixesBugs.length > 0) yield* say(`fixes  ${fixesBugs.map((id) => id.slice(0, 7)).join(", ")}`)
         if (media?.at !== undefined) yield* uploadRecordings(root, declaration.feed!, media.at, head, media.recordings)
         if (note !== undefined) yield* deleteNote(note)
         if (declaration.feed !== undefined) {

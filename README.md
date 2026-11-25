@@ -218,10 +218,13 @@ pull requests:
   `land event <sha> --kind <kind> --state pass|fail|run|info --title <title> [--url <url>] [--detail-file <file>] [--repairs <sha>]`
   commits `event.json` with no parent, pushes `refs/land-events/<sha>/<id>`,
   and notifies the feed.
-- **Attribute and query bugs:**
+- **Attribute, close, and query bugs:**
   `land bug <culprit-sha> --title "<summary>" [--severity p0|p1|p2] [--source agent|review|ci|prod|human] [--location path[:line]] [--detail-file <file>] [--fixed-by <sha>] [--url <url>]`
-  records a regression against the commit that introduced it (and optionally
-  emits a paired repair event).
+  records a regression against the commit that introduced it and prints its
+  short id (`land: id <id>`). Add `Fixes-Bug: <id>` to a fix commit's trailer
+  block (or pass `land --fixes <id>`) to close specific bugs automatically when
+  landing, or run `land bug resolve <id> --by <fix-sha>` for an already-landed
+  fix.
   `land bugs [--open] [--since 30d] [--path <prefix>] [--severity p0|p1|p2] [--json]`
   queries registered bugs for retrospective analysis or before touching a
   sensitive area.

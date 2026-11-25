@@ -30,7 +30,10 @@ unfinished work unwired, or behind a setting that is off by default.
 
 Write each commit message for a reader of `main`: state what changed and why.
 When a slice adds code that nothing uses yet, say in one line what will use it
-and which plan or seed names it.
+and which plan or seed names it. When a commit fixes a registered bug (from a
+review message or `land bugs --open`), add a `Fixes-Bug: <id>` trailer in the
+commit's trailer block (repeatable, one per bug) so landing closes it
+automatically; you can also pass `land --fixes <id>`.
 
 Commit as yourself. `land` refuses commits whose author differs from your
 global git identity, and prints how to fix them. To commit under another
@@ -220,6 +223,15 @@ the feed so humans and future agents can trace regressions in that area:
 
 ```bash
 land bug <culprit> --title "<summary>" --severity p0|p1|p2 [--location path:line] [--fixed-by <fix-sha>]
+```
+
+`land bug` prints the bug's short id (`land: id <id>`). When you land a fix for
+an open bug, include `Fixes-Bug: <id>` in the commit's trailer block (or pass
+`land --fixes <id>`) so the landing closes that bug on push. To close a bug
+whose fix already landed without a trailer, run:
+
+```bash
+land bug resolve <id> --by <fix-sha>
 ```
 
 Inspect past regressions in an area before editing it with

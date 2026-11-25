@@ -10,6 +10,7 @@ import { init } from "./init.ts"
 import { land } from "./landing.ts"
 import { record } from "./record.ts"
 import { brief, comments, review, show } from "./review.ts"
+import { normalizeBugId } from "./schema.ts"
 import { version } from "../package.json"
 
 const help = `land lands finished commits on main: it rebases onto origin/main, runs the
@@ -19,6 +20,8 @@ Landing:
   land                 land the commits of the current branch, with the note in
                        .land/note.md when there is one
   land --note <file>   land them with the note in <file>
+  land --fixes <id>    mark registered bug <id> fixed by this landing (repeatable;
+                       Fixes-Bug: <id> commit trailers are collected automatically)
   land --ack-flake <test> --owner <ref>
                        re-run after a gate failure on an unchanged diff once the
                        flake is diagnosed and tracked by <ref> (or fixed on main)
@@ -40,7 +43,9 @@ Review, feed & bugs:
                        push an event about the landing <sha> to refs/land-events/, and tell the feed
   land bug <sha> --title <title> [--severity p0|p1|p2] [--source agent|review|ci|prod|human]
            [--location <path[:line]>] [--detail-file <file>] [--fixed-by <sha>] [--url <url>]
-                       register a bug attributed to commit <sha>
+                       register a bug attributed to commit <sha> and print its short id
+  land bug resolve <id> --by <fix-sha> [--title <title>]
+                       mark an existing registered bug fixed by an already-landed commit
   land bugs [--open] [--since <Nd|ISO>] [--path <prefix>] [--severity p0|p1|p2] [--json]
                        list bugs registered for this repository on the feed
   land auth token <token|-> | status | logout
@@ -92,6 +97,7 @@ const parseLandArgs = (args: ReadonlyArray<string>): ParsedLandArgs => {
   let note: string | undefined
   let ackFlake: string | undefined
   let owner: string | undefined
+  const fixes: string[] = []
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
     const next = args[i + 1]
@@ -100,6 +106,14 @@ const parseLandArgs = (args: ReadonlyArray<string>): ParsedLandArgs => {
       if (next === undefined || next === "" || next.startsWith("-"))
         return { kind: "error", message: "--note requires a file path" }
       note = next
+      i += 1
+    } else if (arg === "--fixes") {
+      if (missingValue(next)) return { kind: "error", message: "--fixes requires a bug id" }
+      const normalized = normalizeBugId(next!)
+      if (normalized === undefined) {
+        return { kind: "error", message: `--fixes: bad bug id ${next}; expected 7-40 hex characters` }
+      }
+      if (!fixes.includes(normalized)) fixes.push(normalized)
       i += 1
     } else if (arg === "--ack-flake") {
       if (ackFlake !== undefined) return { kind: "error", message: "--ack-flake may only be passed once" }
@@ -127,6 +141,7 @@ const parseLandArgs = (args: ReadonlyArray<string>): ParsedLandArgs => {
     options: {
       ...(note === undefined ? {} : { note }),
       ...(ackFlake !== undefined && owner !== undefined ? { ackFlake: { test: ackFlake, owner } } : {}),
+      ...(fixes.length === 0 ? {} : { fixes }),
     },
   }
 }

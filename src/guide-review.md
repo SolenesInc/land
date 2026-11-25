@@ -81,22 +81,31 @@ A reviewer does not edit code unless you tell it to fix a finding.
 
 ## Route each finding
 
+When `land.toml` has a `feed` key, register each confirmed defect first so you
+have its short bug id (`land: id <id>`) to pass along to whoever fixes it:
+
+```bash
+land bug <sha> --title "<title>" --severity p0|p1 --source review [--location path:line] --detail-file <file>
+```
+
 Decide once per commit, in this order:
 
 1. When the runner can reach a lander, and the session in the commit's
-   `Attn-Session:` is live, send that session the sha, each finding, what a
-   fix needs, and the instruction to fix it on a new branch from `origin/main`
-   and land the fix with `land`.
+   `Attn-Session:` is live, send that session the sha, each finding (with its
+   bug id when registered), what a fix needs, and the instruction to fix it on
+   a new branch from `origin/main`, include `Fixes-Bug: <id>` in the fix
+   commit's trailers, and land the fix with `land`.
 2. When the runner can reach a lander, and an agent tends the seed in the
    commit's `Attn-Seed:`, send that agent the same message.
 3. When the fix is small and clear, and the runner can land a fix, tell the
-   reviewer to make the fix on a new branch from `origin/main` and land it with
-   `land`, following `land guide`.
+   reviewer to make the fix on a new branch from `origin/main`, include
+   `Fixes-Bug: <id>` in the fix commit's trailers, and land it with `land`,
+   following `land guide`.
 4. Otherwise, open one GitHub issue per finding. Name the commit, its author,
-   the `file:line`, the trigger, and what a fix needs. An earlier pass that
-   stopped before it moved `reviewed` may have opened the issue already, so
-   list the issues first and skip a finding whose short sha and title are
-   there:
+   the bug id (when registered), the `file:line`, the trigger, and what a fix
+   needs. An earlier pass that stopped before it moved `reviewed` may have
+   opened the issue already, so list the issues first and skip a finding whose
+   short sha and title are there:
 
    ```bash
    gh api 'repos/{owner}/{repo}/issues?state=all&per_page=100' --paginate --jq '.[] | select(.title | startswith("Review ")) | .title'
@@ -116,9 +125,8 @@ fix's commit on GitHub). Omit `--url` when the finding went in a message.
 land event <sha> --kind finding --state fail --title "P1: <title>" --url <route> --detail-file <file>
 ```
 
-For each confirmed defect (a P0 or P1 bug traced to an earlier commit), also
-record it in the feed's bug ledger so it annotates the diff and tracks time to
-fix:
+If you did not register a confirmed defect with `land bug` before routing it,
+record it now so it annotates the diff and tracks time to fix:
 
 ```bash
 land bug <sha> --title "<title>" --severity p0|p1 --source review [--location path:line] --detail-file <file>
