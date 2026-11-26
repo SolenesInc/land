@@ -60,7 +60,8 @@ const failed = (why: string): Failure => ({ kind: "failed", why })
 export type Upload = {
   readonly feed: string
   readonly at: Repository
-  readonly head: string // the landing whose ref lists the recording
+  readonly head: string // the landing whose ref (or event ref) lists the recording
+  readonly eventId?: string // when set, authorized by refs/land-events/<head>/<eventId>:event.json
   readonly sha256: string
   readonly path: string // the bytes
 }
@@ -69,8 +70,9 @@ export type Upload = {
 // feed holds now; fails with why the recording is not uploaded.
 export const upload = (u: Upload) =>
   Effect.gen(function* () {
+    const query = u.eventId === undefined ? "" : `?event=${encodeURIComponent(u.eventId)}`
     const api = `${trim(u.feed)}/api/media/${u.at.owner}/${u.at.repo}/${u.head}/${u.sha256}`
-    const asked = yield* call(api, { method: "POST" })
+    const asked = yield* call(`${api}${query}`, { method: "POST" })
     if (!asked.ok) return yield* Effect.fail(answered(asked, "the feed"))
     const answer = (yield* Effect.tryPromise({
       try: () => asked.json(),
@@ -86,7 +88,7 @@ export const upload = (u: Upload) =>
       putTimeout,
     )
     if (!put.ok) return yield* Effect.fail(failed(`the storage answered ${put.status}`))
-    const told = yield* call(`${api}/uploaded`, { method: "POST" })
+    const told = yield* call(`${api}/uploaded${query}`, { method: "POST" })
     if (told.status === 410) return "removed" as const
     if (!told.ok) return yield* Effect.fail(answered(told, "the feed"))
     return "uploaded" as const

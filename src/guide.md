@@ -81,35 +81,42 @@ and commit. Settle uncertain findings yourself, or ask.
 
 ## Note
 
-When the change has a visible surface (a screen, a page, or a terminal),
-capture it first:
-
-```bash
-land record [args]
-```
-
-`land record` runs the `record` command from `land.toml` and prints one
-markdown line per new recording, such as `![banner](.land/media/banner.mp4)`.
-
 Write a brief note for the landing in `.land/note.md`. Write for a reader of
 `main` who lands cold on the feed: state in a few lines what changed for them,
-why, and any non-obvious trade-off. Paste the recording's line when you made
-one, and add a small diagram when one clarifies the flow. Do not paste test
-logs or commit lists.
+why, and any non-obvious trade-off. Add a small diagram when one clarifies the
+flow. Do not paste test logs or commit lists.
 
-`land` adds `.land/` to the clone's `.git/info/exclude`, so the note is never
-committed and never triggers the untracked-file check. To keep the note
-elsewhere, run `land --note <file>` instead of `land`.
+When the change has a visible surface (a screen, a page, or a terminal), include
+verification evidence (screenshots, GIFs, or videos) **before** you tear down
+any test instance:
 
-A note may link a local recording only when `land.toml` names a `feed`. Before
-the gate runs, `land` rewrites each local link to its feed address, lists the
-file in `landing.json`, and uploads it after the push. Any recording that
-fails to upload waits in the outbox on your machine, and the next `land` in
-any repository sends it. A feed outage never blocks a landing.
+- **Already have captures from Check?** Any local `png`, `jpg`, `jpeg`, `gif`,
+  `webp`, `mp4`, or `webm` file works — whether it sits in `.land/media/`,
+  `/tmp/`, or an `attn` seed's artifact folder. Link it in `.land/note.md` or
+  pass `land --media <file>` (repeatable). `land` hashes and uploads it without
+  deleting files outside `.land/`.
+- **Need to record a fresh clip?** Run `land record [args]` (which runs the
+  `record` command from `land.toml`, writes into `.land/media/`, and prints
+  markdown lines to paste into `.land/note.md`).
+- **Attaching evidence after the push** (for example from a post-landing check
+  report or a separate cross-platform verifier): run
+  `land evidence <sha> <file>... [-m "<summary>"] [--title "<title>"]` to
+  attach images, GIFs, or videos to an already-landed commit.
+
+`land` adds `.land/` to the clone's `.git/info/exclude`, so the note and files
+in `.land/media/` are never committed and never trigger the untracked-file
+check. To keep the note elsewhere, run `land --note <file>` instead of `land`.
+
+A note or `--media` flag may link local media only when `land.toml` names a
+`feed`. Before the gate runs, `land` rewrites each local link to its feed
+address, lists the file in `landing.json`, and uploads it after the push. Any
+recording that fails to upload waits in the outbox on your machine, and the
+next `land` in any repository sends it. A feed outage never blocks a landing.
 
 `land` pushes the note beside `main` in the landing ref `refs/landings/<head>`
 and deletes the note file after the push. When `land` pushes nothing, the note
-stays for the next attempt. A note cannot change after it lands.
+stays for the next attempt. A note cannot change after it lands; add follow-up
+media with `land evidence <sha> <file>...`.
 
 ## Land
 
@@ -131,8 +138,15 @@ land
   other conflict, `land` aborts the rebase, leaves your branch as it was, and
   names the conflicted files. Rebase with `git rebase origin/main`, rerun the
   checks the resolution touches, and run `land` again.
-- The note links a missing file, a recording over 200 MB, or a local recording
-  when `land.toml` names no `feed`.
+- The note or `--media` links a missing file, an unsupported file type, a
+  recording over 200 MB, or a local recording when `land.toml` names no `feed`.
+- `.land/media/` holds recordings not linked in the note, commits carry an
+  `Attn-Seed:` with fresh unlinked media artifacts, or the diff touches a path
+  matching `visual_paths` in `land.toml` with no media attached. Attach media
+  with `--media <file>` (or link it in `.land/note.md`), or pass
+  `land --no-media "<reason>"` when no visual evidence applies.
+- `land.toml` sets `require_note = true` and no note (or `--media`) was given,
+  or `evidence_check` exits non-zero.
 - The gate fails. `land` pushes nothing, records the failure for this diff's
   patch-id, and exits with the gate's status. Never re-run the gate or a
   failing test blindly hoping it passes: `land` refuses a second run on the

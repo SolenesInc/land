@@ -2,6 +2,7 @@ import { Cause, Effect, Exit } from "effect"
 import { auth } from "./auth.ts"
 import { bug, bugs } from "./bug.ts"
 import { event } from "./event.ts"
+import { evidence } from "./evidence.ts"
 import type { LandFailed } from "./failure.ts"
 import guide from "./guide.md" with { type: "text" }
 import reviewGuide from "./guide-review.md" with { type: "text" }
@@ -20,6 +21,11 @@ Landing:
   land                 land the commits of the current branch, with the note in
                        .land/note.md when there is one
   land --note <file>   land them with the note in <file>
+  land --media <file>  attach a local image, GIF, or video to the landing note
+                       (repeatable; any png, jpg, jpeg, gif, webp, mp4, or webm)
+  land --no-media <reason>
+                       land without media when visual paths changed or unlinked
+                       media exists; recorded in landing.json
   land --fixes <id>    mark registered bug <id> fixed by this landing (repeatable;
                        Fixes-Bug: <id> commit trailers are collected automatically)
   land --ack-flake <test> --owner <ref>
@@ -29,6 +35,8 @@ Landing:
   land record [args]   run the record command, and print a markdown line for each recording it made
 
 Review, feed & bugs:
+  land evidence <sha> <file>... [-m <text> | --detail-file <file>] [--title <title>]
+                       attach verification media (images, GIFs, videos) to an already-landed commit
   land show <sha|url>  fetch the markdown review bundle (note, comments, bugs) from the feed
   land comments [<sha|url>] [--open] [--json]
                        list human review comments for a landing or the repository
@@ -39,7 +47,7 @@ Review, feed & bugs:
   land brief <sha> <file> [--base <sha>] [--no-check]
                        validate and push a review document to refs/land-events/ for the feed
   land event <sha> --kind <kind> --state pass|fail|run|info --title <title>
-             [--url <url>] [--detail-file <file>] [--repairs <sha>]
+             [--url <url>] [--detail-file <file>] [--media <file>]... [--repairs <sha>]
                        push an event about the landing <sha> to refs/land-events/, and tell the feed
   land bug <sha> --title <title> [--severity p0|p1|p2] [--source agent|review|ci|prod|human]
            [--location <path[:line]>] [--detail-file <file>] [--fixed-by <sha>] [--url <url>]
@@ -65,13 +73,15 @@ instead, and land uploads it after the push. What land cannot send to the feed
 waits in the outbox, $XDG_STATE_HOME/land/outbox, and every later land sends it.
 
 land.toml, at the repository root:
-  gate = "bun run check"   a shell command; land pushes only when it exits 0
-  main = "main"            the branch to land on; "main" when absent
-  resolve = "<command>"    a shell command run on rebase conflicts; exit 0 stages the fix and continues
-  feed = "<url>"           the feed that shows landings and hosts their recordings
-  record = "<command>"     a shell command that writes recordings into $LAND_MEDIA, which is
-                           .land/media/; land record runs it at the repository root with its
-                           arguments appended
+  gate = "bun run check"          a shell command; land pushes only when it exits 0
+  main = "main"                   the branch to land on; "main" when absent
+  resolve = "<command>"           a shell command run on rebase conflicts; exit 0 stages the fix and continues
+  feed = "<url>"                  the feed that shows landings and hosts their recordings
+  record = "<command>"            a shell command that writes recordings into $LAND_MEDIA (.land/media/);
+                                  land record runs it at the repository root with its arguments appended
+  visual_paths = ["src/ui/**"]    path globs that require media (or --no-media "<reason>") when changed
+  evidence_check = "<command>"    a shell command run before the gate to verify or suggest evidence
+  require_note = true             refuse to land without a note (or --media)
 `
 
 const report = async (command: Effect.Effect<void, LandFailed>) => {
@@ -95,8 +105,10 @@ const missingValue = (value: string | undefined) => value === undefined || value
 
 const parseLandArgs = (args: ReadonlyArray<string>): ParsedLandArgs => {
   let note: string | undefined
+  let noMedia: string | undefined
   let ackFlake: string | undefined
   let owner: string | undefined
+  const media: string[] = []
   const fixes: string[] = []
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
@@ -106,6 +118,15 @@ const parseLandArgs = (args: ReadonlyArray<string>): ParsedLandArgs => {
       if (next === undefined || next === "" || next.startsWith("-"))
         return { kind: "error", message: "--note requires a file path" }
       note = next
+      i += 1
+    } else if (arg === "--media") {
+      if (missingValue(next)) return { kind: "error", message: "--media requires a file path" }
+      media.push(next!)
+      i += 1
+    } else if (arg === "--no-media") {
+      if (noMedia !== undefined) return { kind: "error", message: "--no-media may only be passed once" }
+      if (next === undefined || next.trim() === "") return { kind: "error", message: "--no-media requires a reason" }
+      noMedia = next.trim()
       i += 1
     } else if (arg === "--fixes") {
       if (missingValue(next)) return { kind: "error", message: "--fixes requires a bug id" }
@@ -130,6 +151,9 @@ const parseLandArgs = (args: ReadonlyArray<string>): ParsedLandArgs => {
       return { kind: "unknown" }
     }
   }
+  if (noMedia !== undefined && media.length > 0) {
+    return { kind: "error", message: "--no-media cannot be combined with --media" }
+  }
   if (ackFlake !== undefined && owner === undefined) {
     return { kind: "error", message: "--ack-flake requires --owner <seed-issue-or-sha>" }
   }
@@ -140,6 +164,8 @@ const parseLandArgs = (args: ReadonlyArray<string>): ParsedLandArgs => {
     kind: "ok",
     options: {
       ...(note === undefined ? {} : { note }),
+      ...(media.length === 0 ? {} : { media }),
+      ...(noMedia === undefined ? {} : { noMedia }),
       ...(ackFlake !== undefined && owner !== undefined ? { ackFlake: { test: ackFlake, owner } } : {}),
       ...(fixes.length === 0 ? {} : { fixes }),
     },
@@ -148,6 +174,7 @@ const parseLandArgs = (args: ReadonlyArray<string>): ParsedLandArgs => {
 
 const main = async (args: ReadonlyArray<string>) => {
   if (args[0] === "record") return report(record(args.slice(1)))
+  if (args[0] === "evidence") return report(evidence(args.slice(1)))
   if (args[0] === "event") return report(event(args.slice(1)))
   if (args[0] === "bug") return report(bug(args.slice(1)))
   if (args[0] === "bugs") return report(bugs(args.slice(1)))

@@ -23,6 +23,18 @@ was.
   and fails with `land: --note <file>: no such file` before the gate when it
   is missing. A note git tracks is refused, because `land` deletes the note
   after the push.
+- `land-media-flag` attaches one or more local media files with repeatable
+  `land --media <file>`, appending feed links to the pushed note (or creating a
+  note from them when none exists), deduping files already linked in the note,
+  and uploading them after push.
+- `land-evidence-guards` refuses before the gate (when `feed` is configured and
+  `--no-media` is not passed) if `.land/media/` holds unlinked recordings, if
+  an `Attn-Seed:` trailer on `base..HEAD` has fresh unlinked media artifacts,
+  or if `base..HEAD` touches `visual_paths` with 0 recordings. Passing
+  `land --no-media "<reason>"` satisfies these guards, prints
+  `land: media  none (--no-media: <reason>)`, and writes `noMediaReason` into
+  `landing.json`. `require_note = true` refuses when no note or `--media` is
+  present, and `evidence_check` runs a custom pre-gate shell check.
 - `land-exclude` adds `.land/` to the clone's `.git/info/exclude` once, so a
   note is never an untracked file.
 - `land-gate-env` gives the gate `LAND_BASE`, the `main` commit the landing
@@ -67,6 +79,9 @@ was.
   `src/landing.ts`).
 - Run `land --note <file>` to land with a note kept outside `.land/`
   (`src/main.ts`, `src/note.ts`).
+- Run `land --media <file>` (repeatable) to attach local images, GIFs, or
+  videos directly, or `land --no-media "<reason>"` to record why a change
+  landed without media (`src/main.ts`, `src/landing.ts`, `src/media.ts`).
 - Run `land --fixes <id>` (repeatable) or include `Fixes-Bug: <id>` in a
   commit's trailer block to mark registered bugs fixed by this landing
   (`src/main.ts`, `src/landing.ts`, `src/schema.ts`).
@@ -105,6 +120,12 @@ Preconditions:
   `.land` is empty and the exclude has the line once. Run
   `drive.ts r do origin.git 'git ls-tree --name-only "refs/landings/$(git rev-parse main)" && git show "refs/landings/$(git rev-parse main):note.md"'`:
   `landing.json`, `note.md`, and the sentence.
+- **Media & evidence guards.** With `feed` and `visual_paths = ["ui/**"]` in
+  `land.toml`, commit `ui/panel.ts` and run `drive.ts r feed lander land`: it
+  refuses before the gate, naming `ui/panel.ts`. Attach a local image with
+  `drive.ts r feed lander 'echo shot > ../shot.png && land --media ../shot.png'`
+  (or pass `land --no-media "refactor only"` to record `noMediaReason` in
+  `landing.json`).
 - **Nothing to land.** Run `drive.ts r do lander land` again. It prints
   `land: nothing to land` and exits 0.
 - **A failing gate.** Run
@@ -184,7 +205,13 @@ Preconditions:
   "a note that git tracks is refused, because land would delete it", "land warns
   after pushing when a landing undoes an earlier commit on main", "resolve in
   land.toml resolves generated-file rebase conflicts and aborts on real
-  conflicts".
+  conflicts", "land --media attaches local files to a note or synthesizes one,
+  deduplicates, and keeps files outside .land/", "land refuses unlinked
+  .land/media/ files, visual_paths without media, require_note, and failing
+  evidence_check before the gate", "land refuses when an Attn-Seed trailer has
+  fresh unlinked media, and ignores artifacts older than the seed's last
+  landing", "parseAttnSeedTrailers reads only the git trailer paragraph and
+  deduplicates".
 
 ## Gotchas
 

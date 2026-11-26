@@ -39,10 +39,13 @@ export const stubFeed = (
   const reviewComments: ReviewComment[] = [...comments]
   const events: Array<{ owner: string; name: string; head: string; id: string; body: Event }> = []
 
-  const listed = (head: string, sha256: string) => {
-    const record = read(origin, "show", `refs/landings/${head}:landing.json`)
+  const listed = (head: string, sha256: string, eventId: string | null) => {
+    const ref =
+      eventId !== null ? `refs/land-events/${head}/${eventId}:event.json` : `refs/landings/${head}:landing.json`
+    const record = read(origin, "show", ref)
     if (record === undefined) return undefined
-    return (JSON.parse(record).recordings as { sha256: string; bytes: number }[]).find((r) => r.sha256 === sha256)
+    const recordings = (JSON.parse(record).recordings ?? []) as { sha256: string; bytes: number }[]
+    return recordings.find((r) => r.sha256 === sha256)
   }
 
   const authorized = (request: globalThis.Request) => {
@@ -68,7 +71,7 @@ export const stubFeed = (
       const media = request.method === "POST" ? path.match(mediaPath) : null
       if (media) {
         const [, head, sha256, done] = media as unknown as [string, string, string, string?]
-        const file = listed(head, sha256)
+        const file = listed(head, sha256, url.searchParams.get("event"))
         if (file === undefined) return new Response("the landing lists no such recording\n", { status: 404 })
         if (done) return new Response(null, { status: stored.has(sha256) ? 204 : 409 })
         if (stored.has(sha256)) return Response.json({ present: true })

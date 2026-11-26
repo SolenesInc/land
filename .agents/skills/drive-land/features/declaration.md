@@ -17,6 +17,15 @@ branch other than `main` to land on.
   [Record](record.md).
 - `decl-feed` names the feed that shows landings and hosts their recordings;
   see [Feed](feed.md).
+- `decl-visual-paths` lists path globs (`visual_paths = ["src/ui/**"]`) that
+  require media (or `--no-media "<reason>"`) when `feed` is configured and any
+  changed file matches.
+- `decl-evidence-check` runs the `evidence_check` command with `sh -c` at the
+  repository root (with `LAND_BASE`, `LAND_HEAD`, `LAND_MEDIA`, `LAND_NOTE`,
+  `LAND_RECORDINGS`, and `LAND_NO_MEDIA`) before the gate, refusing to push on
+  non-zero exit.
+- `decl-require-note` (`require_note = true`) refuses to land when no note (or
+  `--media`) is provided.
 - `decl-missing` refuses to land in a repository with no `land.toml`.
 - `decl-unknown-key` refuses a key it does not know, so a misspelled `gate`
   never lands unchecked.
@@ -82,7 +91,9 @@ Preconditions:
 ## Tests
 
 - `test/land.test.ts`: "land loads no configuration from the repository it
-  runs in". The other tests use a `land.toml` with a gate.
+  runs in", "land refuses unlinked .land/media/ files, visual_paths without
+  media, require_note, and failing evidence_check before the gate". The other
+  tests use a `land.toml` with a gate.
 
 ## Gotchas
 

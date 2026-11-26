@@ -111,6 +111,9 @@ Then commit land.toml and AGENTS.md, and land the commit with land.
    resolve = "scripts/land-resolve.sh"       # optional rebase-conflict resolver; receives LAND_BASE
    record = "scripts/land-record.sh"         # optional capture command for `land record`; receives LAND_MEDIA
    feed = "https://land-feed.caketroll.cloud" # optional feed URL for landings, media, and review events
+   visual_paths = ["src/ui/**"]              # optional path globs requiring media (or --no-media "<reason>")
+   evidence_check = "scripts/land-evidence.sh" # optional pre-gate check receiving LAND_BASE/HEAD/MEDIA/NOTE/RECORDINGS/NO_MEDIA
+   require_note = true                       # optional: refuse to land without a note (or --media)
    ```
 
    Leave `gate` out only when the repository has no pre-push checks.
@@ -172,20 +175,52 @@ feed = "https://land-feed.caketroll.cloud"
 ```
 
 When `.land/note.md` links a local media file (`png`, `jpg`, `jpeg`, `gif`,
-`webp`, `mp4`, `webm`), `land` rewrites the link to
-`<feed>/m/<owner>/<repo>/<sha256>.<ext>`, records its hash and size in
-`landing.json`, uploads it after the push with no credential (the feed verifies
-the ref on GitHub), deletes uploaded files inside `.land/`, and prints the
-landing URL:
+`webp`, `mp4`, `webm`), or you pass `land --media <file>` (repeatable), `land`
+rewrites the link to `<feed>/m/<owner>/<repo>/<sha256>.<ext>`, records its
+hash and size in `landing.json`, uploads it after the push with no credential
+(the feed verifies the ref on GitHub), deletes uploaded files inside `.land/`
+(leaving files outside `.land/` untouched), and prints the landing URL:
 
 ```text
-$ land
+$ land --media /tmp/after.png
 land: note   .land/note.md, 1 recording
 land: gate   bun run check   ok in 1m 49s
 land: push   main is at 41d07be
 land: media  1 recording uploaded
 land: feed   https://land-feed.caketroll.cloud/SolenesInc/land/41d07be
 ```
+
+When `feed` is configured, `land` guards against accidentally dropping
+verification media before the gate runs:
+
+- **Orphaned `.land/media/` files:** refuses if `.land/media/` holds recordings
+  that are not linked in `.land/note.md` or passed via `--media`.
+- **Fresh `Attn-Seed:` media:** when commits carry `Attn-Seed:` trailers and
+  `attn` is on `PATH`, refuses if a seed has media artifacts newer than its
+  previous landing on `main` and 0 recordings are attached.
+- **Visual paths (`visual_paths` in `land.toml`):** refuses when the diff
+  touches a matching path with 0 recordings attached (supports `!pattern`
+  negation, e.g. `["src/ui/**", "!**/*.test.tsx"]`).
+
+Pass `land --no-media "<reason>"` when a change legitimately needs no visual
+evidence; the reason is recorded as `noMediaReason` in `landing.json`.
+
+A repository can also declare `evidence_check = "<command>"` in `land.toml`
+(runs before the gate regardless of `feed`, receiving `LAND_BASE`, `LAND_HEAD`,
+`LAND_MEDIA`, `LAND_NOTE`, `LAND_RECORDINGS`, and `LAND_NO_MEDIA`) or
+`require_note = true`.
+
+To attach images, GIFs, or videos _after_ a commit has already landed (for
+example from a post-landing check report or a cross-platform verifier), run:
+
+```bash
+land evidence <sha> <file>... [-m "<summary>" | --detail-file <file>] [--title "<title>"]
+```
+
+`land evidence` pushes a `kind: "evidence"` event to `refs/land-events/<sha>/<id>`
+and uploads each recording through the same outbox-backed flow. `land event`
+also accepts repeatable `--media <file>` and rewrites local media links in
+`--detail-file`.
 
 A missing file, a recording over 200 MB, or a local recording without a `feed`
 key fails before the gate with nothing pushed. Feed failures never fail a
@@ -215,9 +250,9 @@ pull requests:
   `land brief <sha> <file> [--base <sha>] [--no-check]` validates and pushes
   the review document to `refs/land-events/`.
 - **Post lifecycle events:**
-  `land event <sha> --kind <kind> --state pass|fail|run|info --title <title> [--url <url>] [--detail-file <file>] [--repairs <sha>]`
+  `land event <sha> --kind <kind> --state pass|fail|run|info --title <title> [--url <url>] [--detail-file <file>] [--media <file>]... [--repairs <sha>]`
   commits `event.json` with no parent, pushes `refs/land-events/<sha>/<id>`,
-  and notifies the feed.
+  notifies the feed, and uploads any linked or `--media` recordings.
 - **Attribute, close, and query bugs:**
   `land bug <culprit-sha> --title "<summary>" [--severity p0|p1|p2] [--source agent|review|ci|prod|human] [--location path[:line]] [--detail-file <file>] [--fixed-by <sha>] [--url <url>]`
   records a regression against the commit that introduced it and prints its

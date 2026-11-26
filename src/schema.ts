@@ -2,6 +2,16 @@ import { Schema } from "effect"
 
 // The schemas land and the feed share. The feed imports them from land at a pinned commit.
 
+export const RecordingExt = Schema.Literals(["png", "jpg", "gif", "webp", "mp4", "webm"])
+export type RecordingExt = typeof RecordingExt.Type
+
+export const RecordingEntry = Schema.Struct({
+  sha256: Schema.String,
+  ext: RecordingExt,
+  bytes: Schema.Number,
+})
+export type RecordingEntry = typeof RecordingEntry.Type
+
 // landing.json in the commit of refs/landings/<head>: what land knew at the push.
 export const LandingRecord = Schema.Struct({
   version: Schema.Literal(1),
@@ -23,14 +33,10 @@ export const LandingRecord = Schema.Struct({
   ),
   // Bug ids this landing closes (from Fixes-Bug: commit trailers and --fixes flags).
   fixesBugs: Schema.optionalKey(Schema.Array(Schema.String)),
+  // Reason recorded when the lander explicitly passed --no-media "<reason>".
+  noMediaReason: Schema.optionalKey(Schema.String),
   // The recordings the note links, which the feed may accept for this landing.
-  recordings: Schema.Array(
-    Schema.Struct({
-      sha256: Schema.String,
-      ext: Schema.Literals(["png", "jpg", "gif", "webp", "mp4", "webm"]),
-      bytes: Schema.Number,
-    }),
-  ),
+  recordings: Schema.Array(RecordingEntry),
 })
 export type LandingRecord = typeof LandingRecord.Type
 
@@ -46,9 +52,9 @@ export const CodeLocation = Schema.Struct({
 })
 export type CodeLocation = typeof CodeLocation.Type
 
-// One fact about a landing that arrives after its push. land event, land bug and land brief write it.
+// One fact about a landing that arrives after its push. land event, land evidence, land bug and land brief write it.
 export const Event = Schema.Struct({
-  kind: Schema.String, // "stage" | "read" | "review" | "finding" | "repair" | "bug" | "review-doc" | a new kind
+  kind: Schema.String, // "stage" | "read" | "review" | "finding" | "repair" | "bug" | "review-doc" | "evidence" | a new kind
   state: Schema.Literals(["pass", "fail", "run", "info"]),
   title: Schema.String, // one line the timeline shows
   at: Schema.String, // ISO time
@@ -60,6 +66,7 @@ export const Event = Schema.Struct({
   source: Schema.optionalKey(BugSource), // kind "bug": how the bug was found
   location: Schema.optionalKey(CodeLocation), // kind "bug" / "finding": pinned file:line
   culprit: Schema.optionalKey(Schema.String), // exact culprit commit sha (may be interior to a multi-commit landing)
+  recordings: Schema.optionalKey(Schema.Array(RecordingEntry)), // media attached to this event (e.g. land evidence)
 })
 export type Event = typeof Event.Type
 
@@ -250,6 +257,24 @@ export const parseFixesBugTrailers = (message: string): string[] => {
       if (!token) continue
       const id = normalizeBugId(token)
       if (id) seen.add(id)
+    }
+  }
+  return [...seen]
+}
+
+// Extract unique seed ids from `Attn-Seed: <id>` lines in a commit message's git trailer paragraph.
+export const parseAttnSeedTrailers = (message: string): string[] => {
+  const trimmed = message.trimEnd()
+  if (!trimmed) return []
+  const paragraphs = trimmed.split(/\r?\n[ \t]*\r?\n/)
+  if (paragraphs.length < 2) return []
+  const trailerBlock = paragraphs[paragraphs.length - 1]!
+  const seen = new Set<string>()
+  for (const line of trailerBlock.split(/\r?\n/)) {
+    const match = line.match(/^Attn-Seed:\s*(.+?)\s*$/i)
+    if (!match) continue
+    for (const token of match[1]!.split(/[\s,]+/)) {
+      if (token && /^[a-z0-9][a-z0-9_-]*$/i.test(token)) seen.add(token)
     }
   }
   return [...seen]

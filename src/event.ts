@@ -4,11 +4,12 @@ import { readDeclaration } from "./declaration.ts"
 import { LandFailed } from "./failure.ts"
 import { githubRepository, notify, originUrl, type Failure, type Repository } from "./feed.ts"
 import { git, gitOk, gitWith, run } from "./git.ts"
+import { listed, readMediaBundle, uploadRecordings } from "./media.ts"
 import { keepEvent } from "./outbox.ts"
 import { Event } from "./schema.ts"
 
 export const usage = `land event <sha> --kind <kind> --state pass|fail|run|info --title <title>
-           [--url <url>] [--detail-file <file>] [--repairs <sha>]`
+           [--url <url>] [--detail-file <file>] [--media <file>]... [--repairs <sha>]`
 
 const flags = ["kind", "state", "title", "url", "detail-file", "repairs"] as const
 type Flag = (typeof flags)[number]
@@ -17,11 +18,20 @@ const parse = (args: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const [sha, ...rest] = args
     const given: Partial<Record<Flag, string>> = {}
+    const media: string[] = []
     for (let i = 0; i < rest.length; i += 2) {
-      const flag = rest[i]!.replace(/^--/, "") as Flag
+      const arg = rest[i]!
       const value = rest[i + 1]
-      if (!rest[i]!.startsWith("--") || !flags.includes(flag) || value === undefined || flag in given) {
-        return yield* new LandFailed({ message: `event: unexpected ${rest[i]}\nUsage: ${usage}`, status: 2 })
+      if (arg === "--media") {
+        if (value === undefined || value.trim() === "" || value.startsWith("-")) {
+          return yield* new LandFailed({ message: `event: --media requires a file path\nUsage: ${usage}`, status: 2 })
+        }
+        media.push(value)
+        continue
+      }
+      const flag = arg.replace(/^--/, "") as Flag
+      if (!arg.startsWith("--") || !flags.includes(flag) || value === undefined || flag in given) {
+        return yield* new LandFailed({ message: `event: unexpected ${arg}\nUsage: ${usage}`, status: 2 })
       }
       given[flag] = value
     }
@@ -31,7 +41,7 @@ const parse = (args: ReadonlyArray<string>) =>
         status: 2,
       })
     }
-    return { sha, given }
+    return { sha, given, media }
   })
 
 export const feedContext = Effect.gen(function* () {
@@ -105,24 +115,34 @@ export const pushEvent = (opts: {
       Effect.catch((why: string) => Effect.succeed(`the notice is not sent: ${failure.why}, and ${why}`)),
     )
     console.log(`land: ${pad} ${ref} pushed; ${kept}`)
-    return { id, ref }
+    return { id, ref, ...(failure.kind === "unreachable" ? { unreachable: failure } : {}) }
   })
 
 // D27: an event is a commit with no parent whose tree holds event.json. land pushes it to
 // refs/land-events/<landing sha>/<event commit sha>, then tells the feed, which reads the ref.
 export const event = (args: ReadonlyArray<string>) =>
   Effect.gen(function* () {
-    const { sha, given } = yield* parse(args)
-    const { feed, at } = yield* feedContext
+    const { sha, given, media } = yield* parse(args)
+    const { root, feed, at } = yield* feedContext
     const landing = yield* resolveCommitSha(sha, "event")
 
-    const detail =
+    const detailRaw =
       given["detail-file"] === undefined
         ? undefined
         : yield* Effect.tryPromise({
             try: () => readFile(given["detail-file"]!, "utf8"),
             catch: () => new LandFailed({ message: `--detail-file ${given["detail-file"]}: no such file` }),
           })
+    const bundle = yield* readMediaBundle({
+      root,
+      cwd: process.cwd(),
+      text: detailRaw,
+      noteLabel: given["detail-file"] === undefined ? "event detail" : `--detail-file ${given["detail-file"]}`,
+      extraFiles: media,
+      extraLabel: "--media",
+      feed,
+      pushContext: false,
+    })
     const now = new Date().toISOString()
     const body = yield* Schema.decodeUnknownEffect(Event)({
       kind: given.kind,
@@ -130,9 +150,13 @@ export const event = (args: ReadonlyArray<string>) =>
       title: given.title,
       at: now,
       ...(given.url === undefined ? {} : { url: given.url }),
-      ...(detail === undefined ? {} : { detail }),
+      ...(bundle.text === undefined ? {} : { detail: bundle.text }),
       ...(given.repairs === undefined ? {} : { repairs: given.repairs }),
+      ...(bundle.recordings.length === 0 ? {} : { recordings: listed(bundle.recordings) }),
     }).pipe(Effect.mapError((error) => new LandFailed({ message: `event: ${error.message}`, status: 2 })))
 
-    yield* pushEvent({ feed, at, landing, body, label: "event" })
+    const pushed = yield* pushEvent({ feed, at, landing, body, label: "event" })
+    if (bundle.recordings.length > 0) {
+      yield* uploadRecordings(root, feed, at, landing, bundle.recordings, pushed.id, pushed.unreachable)
+    }
   })

@@ -11,7 +11,7 @@ import {
 } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { parseFixesBugTrailers } from "../src/schema.ts"
+import { parseAttnSeedTrailers, parseFixesBugTrailers } from "../src/schema.ts"
 import { stubFeed } from "./stub-feed.ts"
 
 const root = join(import.meta.dir, "..")
@@ -864,9 +864,9 @@ test("with the feed unreachable, land pushes, the outbox holds the file, and the
   )
   expect(w.landing(head).note).toBe(`A demo.\n\n![demo](${down.url}/m/SolenesInc/demo/${hash}.png)\n`)
   expect(outbox(w)).toEqual([`recording~SolenesInc~demo~${hash}.bytes`, `recording~SolenesInc~demo~${hash}.json`])
-  // The note is gone, since it landed; the recording stays, since it did not upload.
+  // The note is gone since it landed, and the .land/media/ copy is removed once safely persisted in the outbox.
   expect(existsSync(join(lander, ".land", "note.md"))).toBe(false)
-  expect(existsSync(join(lander, ".land", "media", "demo.png"))).toBe(true)
+  expect(existsSync(join(lander, ".land", "media", "demo.png"))).toBe(false)
 
   // Still down: the next land says what waits.
   const waiting = await w.land(lander)
@@ -1456,4 +1456,367 @@ test("land rejects invalid, duplicate, or unpaired --ack-flake and --owner flags
     .result
   expect(noteSwallowed.status).toBe(2)
   expect(noteSwallowed.err).toContain("--note requires a file path")
+})
+
+test("land --media attaches local files to a note or synthesizes one, deduplicates, and keeps files outside .land/", async () => {
+  const w = world()
+  const feed = feedOf(w)
+  const lander = feedClone(w, feed.url)
+
+  // External screenshot outside the repo + recording inside .land/media/
+  const shotPath = join(w.dir, "after-view.png")
+  writeFileSync(shotPath, "png-bytes\n")
+  runLand(w, lander, "record", "clip.mp4")
+
+  // Attach both via --media with no .land/note.md: land synthesizes note.md and uploads both.
+  const head1 = w.commit(lander, "story.txt", "two\n")
+  const landed1 = await w.start(lander, "true", {}, ["--media", shotPath, "--media", ".land/media/clip.mp4"]).result
+  expect(landed1).toMatchObject({ status: 0, err: "" })
+  expect(landed1.out).toContain("land: note   (from --media), 2 recordings\n")
+  expect(landed1.out).toContain("land: media  2 recordings uploaded\n")
+  const shotHash = sha256("png-bytes\n")
+  const clipHash = sha256("recorded clip.mp4\n")
+  expect(w.landing(head1).record.recordings).toEqual([
+    { sha256: shotHash, ext: "png", bytes: 10 },
+    { sha256: clipHash, ext: "mp4", bytes: 18 },
+  ])
+  expect(w.landing(head1).note).toBe(
+    `![after-view](${feed.url}/m/SolenesInc/demo/${shotHash}.png)\n\n![clip](${feed.url}/m/SolenesInc/demo/${clipHash}.mp4)\n`,
+  )
+  // File outside .land/ stays; file inside .land/media/ is removed after upload.
+  expect(existsSync(shotPath)).toBe(true)
+  expect(existsSync(join(lander, ".land", "media", "clip.mp4"))).toBe(false)
+
+  // Passing --media for a file already linked in .land/note.md does not duplicate it.
+  writeFileSync(join(lander, ".land", "note.md"), `Summary.\n\n![shot](${shotPath})\n`)
+  const head2 = w.commit(lander, "story.txt", "three\n")
+  const landed2 = await w.start(lander, "true", {}, ["--media", shotPath]).result
+  expect(landed2).toMatchObject({ status: 0, err: "" })
+  expect(landed2.out).toContain("land: note   .land/note.md, 1 recording\n")
+  expect(w.landing(head2).note).toBe(`Summary.\n\n![shot](${feed.url}/m/SolenesInc/demo/${shotHash}.png)\n`)
+
+  // Duplicate-content files in .land/media/ both linked are both cleaned up on upload.
+  mkdirSync(join(lander, ".land", "media"), { recursive: true })
+  writeFileSync(join(lander, ".land", "media", "dup-a.png"), "same-bytes\n")
+  writeFileSync(join(lander, ".land", "media", "dup-b.png"), "same-bytes\n")
+  const headDup = w.commit(lander, "story.txt", "dup\n")
+  const landedDup = await w.start(lander, "true", {}, [
+    "--media",
+    ".land/media/dup-a.png",
+    "--media",
+    ".land/media/dup-b.png",
+  ]).result
+  expect(landedDup).toMatchObject({ status: 0, err: "" })
+  expect(w.landing(headDup).record.recordings).toHaveLength(1)
+  expect(existsSync(join(lander, ".land", "media", "dup-a.png"))).toBe(false)
+  expect(existsSync(join(lander, ".land", "media", "dup-b.png"))).toBe(false)
+
+  // Validation errors: unsupported extension, extensionless dotfile `.png`, combined with --no-media.
+  const badExt = join(w.dir, "notes.txt")
+  writeFileSync(badExt, "plain text\n")
+  const dotPng = join(w.dir, ".png")
+  writeFileSync(dotPng, "not an extension\n")
+  w.commit(lander, "story.txt", "four\n")
+  const unsupported = await w.start(lander, "true", {}, ["--media", badExt]).result
+  expect(unsupported.status).toBe(1)
+  expect(unsupported.err).toContain("unsupported media type")
+  const dotRejected = await w.start(lander, "true", {}, ["--media", dotPng]).result
+  expect(dotRejected.status).toBe(1)
+  expect(dotRejected.err).toContain("unsupported media type")
+
+  const conflict = await w.start(lander, "true", {}, ["--media", shotPath, "--no-media", "n/a"]).result
+  expect(conflict.status).toBe(2)
+  expect(conflict.err).toContain("--no-media cannot be combined with --media")
+
+  writeFileSync(join(lander, ".land", "note.md"), `![shot](${shotPath})\n`)
+  const noteConflict = await w.start(lander, "true", {}, ["--no-media", "n/a"]).result
+  expect(noteConflict.status).toBe(2)
+  expect(noteConflict.err).toContain("--no-media cannot be used when the note already links recordings")
+  rmSync(join(lander, ".land", "note.md"))
+
+  feed.stop()
+})
+
+test("land refuses unlinked .land/media/ files, visual_paths without media, require_note, and failing evidence_check before the gate", async () => {
+  const w = world()
+  const feed = feedOf(w)
+  const lander = feedClone(w, feed.url)
+  writeFileSync(
+    join(lander, "land.toml"),
+    `gate = 'eval "$TEST_GATE"'
+record = "sh record.sh"
+feed = "${feed.url}"
+visual_paths = ["ui/**", "!ui/**/*.test.ts"]
+require_note = true
+evidence_check = "sh evidence-check.sh"
+`,
+  )
+  writeFileSync(
+    join(lander, "evidence-check.sh"),
+    `#!/bin/sh
+echo "env:$LAND_RECORDINGS:$LAND_NO_MEDIA" > "${join(w.dir, "evidence-env")}"
+[ ! -f "${join(w.dir, "block-evidence")}" ] || { echo "custom check blocked" >&2; exit 4; }
+`,
+  )
+  w.git(lander, "add", ".")
+  w.git(lander, "commit", "--quiet", "-m", "Add evidence config")
+  mkdirSync(join(lander, ".land"), { recursive: true })
+  writeFileSync(join(lander, ".land", "note.md"), "Config setup.\n")
+  expect((await w.land(lander)).status).toBe(0)
+
+  // 1. require_note refuses when no note or --media is provided.
+  mkdirSync(join(lander, "ui"), { recursive: true })
+  w.commit(lander, "ui/panel.ts", "export const panel = 1\n")
+  const gateRan = join(w.dir, "gate-ran")
+  const noNote = await w.land(lander, `touch "${gateRan}"`)
+  expect(noNote.status).toBe(1)
+  expect(noNote.err).toContain("require_note = true")
+  expect(existsSync(gateRan)).toBe(false)
+
+  // 2. Orphan file in .land/media/ is refused when note does not link it.
+  runLand(w, lander, "record", "orphan.mp4")
+  writeFileSync(join(lander, ".land", "note.md"), "Updated panel.\n")
+  const orphan = await w.land(lander, `touch "${gateRan}"`)
+  expect(orphan.status).toBe(1)
+  expect(orphan.err).toContain(".land/media/ has recordings not linked in the note:")
+  expect(orphan.err).toContain(".land/media/orphan.mp4")
+  expect(existsSync(gateRan)).toBe(false)
+  rmSync(join(lander, ".land", "media", "orphan.mp4"))
+
+  // 3. visual_paths refuses when ui/ changed with 0 recordings.
+  const noMedia = await w.land(lander, `touch "${gateRan}"`)
+  expect(noMedia.status).toBe(1)
+  expect(noMedia.err).toContain("this landing changes visual paths declared in land.toml, with no media attached:")
+  expect(noMedia.err).toContain("ui/panel.ts")
+  expect(noMedia.err).toContain("--no-media")
+  expect(existsSync(gateRan)).toBe(false)
+
+  // 4. evidence_check runs before the gate and stops on non-zero exit without writing a gate failure record.
+  writeFileSync(join(w.dir, "block-evidence"), "1")
+  const blocked = await w.start(lander, `touch "${gateRan}"`, {}, ["--no-media", "refactor only"]).result
+  expect(blocked.status).toBe(4)
+  expect(blocked.err).toContain("custom check blocked")
+  expect(blocked.err).toContain("evidence_check")
+  expect(existsSync(gateRan)).toBe(false)
+  expect(readFileSync(join(w.dir, "evidence-env"), "utf8").trim()).toBe("env:0:refactor only")
+  rmSync(join(w.dir, "block-evidence"))
+
+  // 5. Passing --no-media satisfies visual_paths and records noMediaReason in landing.json.
+  const skipped = await w.start(lander, "true", {}, ["--no-media", "refactor only"]).result
+  expect(skipped).toMatchObject({ status: 0, err: "" })
+  expect(skipped.out).toContain("land: media  none (--no-media: refactor only)\n")
+  const head1 = w.main()
+  expect(w.landing(head1).record.noMediaReason).toBe("refactor only")
+
+  // 6. Passing --media satisfies both require_note and visual_paths.
+  const shot = join(w.dir, "panel.png")
+  writeFileSync(shot, "panel-shot\n")
+  w.commit(lander, "ui/panel.ts", "export const panel = 2\n")
+  const withShot = await w.start(lander, "true", {}, ["--media", shot]).result
+  expect(withShot).toMatchObject({ status: 0, err: "" })
+  expect(readFileSync(join(w.dir, "evidence-env"), "utf8").trim()).toBe("env:1:")
+  expect(w.landing(w.main()).record.recordings).toHaveLength(1)
+
+  // 7. Negated visual_paths pattern (!ui/**/*.test.ts) does not require media when only tests change.
+  w.commit(lander, "ui/panel.test.ts", "export const t = 1\n")
+  mkdirSync(join(lander, ".land"), { recursive: true })
+  writeFileSync(join(lander, ".land", "note.md"), "Add unit test.\n")
+  const testOnly = await w.land(lander)
+  expect(testOnly).toMatchObject({ status: 0, err: "" })
+  feed.stop()
+})
+
+test("land refuses when an Attn-Seed trailer has fresh unlinked media, and ignores artifacts older than the seed's last landing", async () => {
+  const w = world()
+  const feed = feedOf(w)
+  const lander = feedClone(w, feed.url)
+
+  const seedDir = join(w.dir, "seed-artifacts")
+  mkdirSync(seedDir, { recursive: true })
+  const oldShot = join(seedDir, "old.png")
+  const freshShot = join(seedDir, "fresh.gif")
+  writeFileSync(oldShot, "old-shot\n")
+  writeFileSync(freshShot, "fresh-gif\n")
+
+  // Fake `attn` CLI on PATH that returns seed JSON for s-demo01.
+  const fakeBin = join(w.dir, "bin")
+  mkdirSync(fakeBin, { recursive: true })
+  const payloadFile = join(w.dir, "seed.json")
+  const fakeAttn = join(fakeBin, "attn")
+  writeFileSync(
+    fakeAttn,
+    `#!/bin/sh
+if [ "$1" = "seed" ] && [ "$2" = "show" ] && [ "$3" = "s-demo01" ]; then
+  cat "${payloadFile}"
+  exit 0
+fi
+exit 1
+`,
+    { mode: 0o755 },
+  )
+  const envWithAttn = { PATH: `${fakeBin}:${process.env.PATH ?? ""}` }
+
+  // First landing for s-demo01: commit has an older %ct than old.png (Commit -> Capture -> Land).
+  writeFileSync(join(lander, "story.txt"), "slice 1\n")
+  w.git(lander, "add", "story.txt")
+  Bun.spawnSync(["git", "commit", "--quiet", "-m", "Slice 1", "-m", "attn-seed: s-demo01, s-other"], {
+    cwd: lander,
+    env: { ...w.env, GIT_COMMITTER_DATE: "2025-01-01T00:00:00Z", GIT_AUTHOR_DATE: "2025-01-01T00:00:00Z" },
+  })
+  const capturedAfterCommit = new Date(Date.now() - 500).toISOString()
+  writeFileSync(
+    payloadFile,
+    JSON.stringify({
+      artifact_dir: seedDir,
+      artifacts: [{ filename: "old.png", relative_target: "", modified_at: capturedAfterCommit }],
+    }),
+  )
+
+  const refused1 = await w.start(lander, "true", envWithAttn).result
+  expect(refused1.status).toBe(1)
+  expect(refused1.err).toContain("seed s-demo01 has recent media not attached to this landing:")
+  expect(refused1.err).toContain(oldShot)
+
+  // Attaching old.png unblocks the first landing (and records wall-clock push time for s-demo01).
+  const landed1 = await w.start(lander, "true", envWithAttn, ["--media", oldShot]).result
+  expect(landed1).toMatchObject({ status: 0, err: "" })
+
+  // Second landing for s-demo01: old.png still has modified_at > commit 1's %ct, but <= landing 1's push time, so it does NOT block.
+  writeFileSync(join(lander, "story.txt"), "slice 2\n")
+  w.git(lander, "add", "story.txt")
+  w.git(lander, "commit", "--quiet", "-m", "Slice 2", "-m", "Attn-Seed: s-demo01")
+  const landed2 = await w.start(lander, "true", envWithAttn).result
+  expect(landed2).toMatchObject({ status: 0, err: "" })
+
+  // Third landing for s-demo01: fresh.gif is newer than the prior landing, so it DOES block until attached or --no-media.
+  const futureIso = new Date(Date.now() + 60_000).toISOString()
+  writeFileSync(
+    payloadFile,
+    JSON.stringify({
+      artifact_dir: seedDir,
+      artifacts: [
+        { filename: "old.png", modified_at: capturedAfterCommit },
+        { filename: "fresh.gif", modified_at: futureIso },
+      ],
+    }),
+  )
+  writeFileSync(join(lander, "story.txt"), "slice 3\n")
+  w.git(lander, "add", "story.txt")
+  w.git(lander, "commit", "--quiet", "-m", "Slice 3", "-m", "Attn-Seed: s-demo01")
+
+  const refused3 = await w.start(lander, "true", envWithAttn).result
+  expect(refused3.status).toBe(1)
+  expect(refused3.err).toContain(freshShot)
+  expect(refused3.err).not.toContain(oldShot)
+
+  const landed3 = await w.start(lander, "true", envWithAttn, ["--media", freshShot]).result
+  expect(landed3).toMatchObject({ status: 0, err: "" })
+  feed.stop()
+})
+
+test("parseAttnSeedTrailers reads only the git trailer paragraph and deduplicates", () => {
+  expect(parseAttnSeedTrailers("Title\n\nMentions Attn-Seed: s-body in prose.\n\nSigned-off-by: x\n")).toEqual([])
+  expect(parseAttnSeedTrailers("Title\n\nAttn-Seed: s-abc123\nAttn-Seed: s-def456, s-abc123\n")).toEqual([
+    "s-abc123",
+    "s-def456",
+  ])
+})
+
+test("land evidence and land event --media upload post-landing recordings and drain through the outbox when the feed is down", async () => {
+  const w = world()
+  const feed = feedOf(w)
+  const lander = feedClone(w, feed.url)
+  const origin = join(w.dir, "origin.git")
+  const head = w.commit(lander, "story.txt", "two\n")
+  expect((await w.land(lander)).status).toBe(0)
+
+  // 1. land evidence uploads post-landing screenshots and links them in event.json.
+  const shot1 = join(w.dir, "mac-dark.png")
+  const shot2 = join(w.dir, "mac-light.mp4")
+  writeFileSync(shot1, "dark-png\n")
+  writeFileSync(shot2, "light-mp4\n")
+  const ev = await w.start(lander, "true", {}, [
+    "evidence",
+    head.slice(0, 7),
+    shot1,
+    shot2,
+    "-m",
+    "- Verified dark and light themes on macOS.",
+    "--title",
+    "macOS verification",
+  ]).result
+  expect(ev).toMatchObject({ status: 0, err: "" })
+  expect(ev.out).toContain(`land: evidence refs/land-events/${head}/`)
+  expect(ev.out).toContain("pushed; the feed has it")
+  expect(ev.out).toContain("land: media  2 recordings uploaded\n")
+
+  const h1 = sha256("dark-png\n")
+  const h2 = sha256("light-mp4\n")
+  expect(feed.stored.get(h1)).toBe("dark-png\n")
+  expect(feed.stored.get(h2)).toBe("light-mp4\n")
+  const evRef = w.git(origin, "for-each-ref", "--format=%(refname)", `refs/land-events/${head}/`).split("\n")[0]!
+  const evBody = JSON.parse(w.git(origin, "show", `${evRef}:event.json`))
+  expect(evBody).toMatchObject({
+    kind: "evidence",
+    state: "info",
+    title: "macOS verification",
+    recordings: [
+      { sha256: h1, ext: "png", bytes: 9 },
+      { sha256: h2, ext: "mp4", bytes: 10 },
+    ],
+  })
+  expect(evBody.detail).toContain("- Verified dark and light themes on macOS.")
+  expect(evBody.detail).toContain(`![mac-dark](${feed.url}/m/SolenesInc/demo/${h1}.png)`)
+  expect(evBody.detail).toContain(`![mac-light](${feed.url}/m/SolenesInc/demo/${h2}.mp4)`)
+
+  // 2. land event --media and local links inside --detail-file also upload via ?event=<id>.
+  const repro = join(w.dir, "repro.gif")
+  writeFileSync(repro, "gif-bytes\n")
+  const detailPath = join(w.dir, "finding.md")
+  writeFileSync(detailPath, `Flicker on resize.\n`)
+  const finding = await w.start(lander, "true", {}, [
+    "event",
+    head.slice(0, 7),
+    "--kind",
+    "finding",
+    "--state",
+    "fail",
+    "--title",
+    "resize flicker",
+    "--detail-file",
+    detailPath,
+    "--media",
+    repro,
+  ]).result
+  expect(finding).toMatchObject({ status: 0, err: "" })
+  expect(finding.out).toContain("land: media  1 recording uploaded\n")
+  expect(feed.stored.get(sha256("gif-bytes\n"))).toBe("gif-bytes\n")
+
+  // 3. With feed down, land evidence queues both the event notice and the recording in the outbox; next land drains both.
+  const port = feed.port
+  feed.stop()
+  const late = join(w.dir, "linux.png")
+  writeFileSync(late, "linux-shot\n")
+  const queued = await w.start(lander, "true", {}, ["evidence", head.slice(0, 7), late]).result
+  expect(queued.status).toBe(0)
+  expect(queued.out).toContain("the notice waits in the outbox")
+  expect(queued.out).toContain("waits in the outbox")
+  expect(outbox(w).length).toBe(3) // 1 event json + 1 recording json + 1 recording bytes
+
+  const up = feedOf(w, port)
+  const drained = await w.land(lander)
+  up.stop()
+  expect(drained.status).toBe(0)
+  expect(drained.out).toContain("land: outbox 2 sent\n")
+  expect(up.stored.get(sha256("linux-shot\n"))).toBe("linux-shot\n")
+  expect(outbox(w)).toEqual([])
+
+  // 4. Bad arguments exit 2.
+  expect((await w.start(lander, "true", {}, ["evidence", head.slice(0, 7)]).result).status).toBe(2)
+  expect(
+    (
+      await w.start(lander, "true", {}, ["evidence", head.slice(0, 7), shot1, "-m", "a", "--detail-file", detailPath])
+        .result
+    ).status,
+  ).toBe(2)
 })

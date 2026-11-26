@@ -7,9 +7,18 @@ import { readDeclaration } from "./declaration.ts"
 import { LandFailed } from "./failure.ts"
 import { git, gitOk, gitWith, run, succeeds } from "./git.ts"
 import { deleteNote, findNote } from "./note.ts"
-import { excludeLandDir } from "./land-dir.ts"
+import { excludeLandDir, landDir } from "./land-dir.ts"
 import { githubRepository, landingAddress } from "./feed.ts"
-import { listed, plural, readNoteMedia, uploadRecordings } from "./media.ts"
+import {
+  findUnlinkedLandMedia,
+  findUnlinkedSeedMedia,
+  listed,
+  matchVisualPaths,
+  plural,
+  readNoteMedia,
+  recordSeedLanding,
+  uploadRecordings,
+} from "./media.ts"
 import { drain } from "./outbox.ts"
 import { parseFixesBugTrailers, type LandingRecord } from "./schema.ts"
 import { version } from "../package.json"
@@ -465,8 +474,53 @@ const collectFixesBugs = (base: string, head: string, explicit: ReadonlyArray<st
     return [...seen]
   })
 
+const runEvidenceCheck = (
+  command: string,
+  root: string,
+  env: {
+    readonly base: string
+    readonly head: string
+    readonly notePath: string
+    readonly recordings: number
+    readonly noMedia: string
+  },
+) =>
+  Effect.gen(function* () {
+    const { status, signal } = yield* Effect.promise(async () => {
+      const child = Bun.spawn(["sh", "-c", command], {
+        cwd: root,
+        stdio: ["inherit", "inherit", "inherit"],
+        env: {
+          ...process.env,
+          LAND_BASE: env.base,
+          LAND_HEAD: env.head,
+          LAND_MEDIA: join(root, landDir, "media"),
+          LAND_NOTE: env.notePath,
+          LAND_RECORDINGS: String(env.recordings),
+          LAND_NO_MEDIA: env.noMedia,
+        },
+      })
+      await child.exited
+      return { status: child.exitCode, signal: child.signalCode }
+    })
+    if (status === 0) return
+    const exit = status ?? 128 + (typeof signal === "string" ? constants.signals[signal] : (signal ?? 0))
+    return yield* new LandFailed({
+      message: `evidence_check   ${command}   failed with status ${exit}; nothing was pushed`,
+      status: exit,
+    })
+  })
+
+const listPreview = (items: ReadonlyArray<string>, limit = 10) => {
+  const shown = items.slice(0, limit).map((item) => `  ${item}`)
+  if (items.length > limit) shown.push(`  ... and ${items.length - limit} more`)
+  return shown.join("\n")
+}
+
 export const land = (options: {
   readonly note?: string
+  readonly media?: ReadonlyArray<string>
+  readonly noMedia?: string
   readonly ackFlake?: { readonly test: string; readonly owner: string }
   readonly fixes?: ReadonlyArray<string>
 }) =>
@@ -504,7 +558,13 @@ Commit, remove or ignore them, then run land again.`,
     if (outbox.sent > 0) yield* say(`outbox ${outbox.sent} sent`)
     if (outbox.waiting > 0) yield* say(`outbox ${outbox.waiting} wait to send: ${outbox.why}`)
 
-    const media = note === undefined ? undefined : yield* readNoteMedia(root, note, declaration.feed)
+    const media = yield* readNoteMedia(root, process.cwd(), note, options.media ?? [], declaration.feed)
+    if (options.noMedia !== undefined && media.recordings.length > 0) {
+      return yield* new LandFailed({
+        message: "--no-media cannot be used when the note already links recordings",
+        status: 2,
+      })
+    }
 
     yield* fetchMain(main)
     yield* refuseCommitsByAnotherAuthor(main)
@@ -515,6 +575,66 @@ Commit, remove or ignore them, then run land again.`,
     const checked = yield* gitOk("rev-parse", "HEAD")
     const checkedBase = yield* gitOk("rev-parse", landRef(main))
     const patchId = yield* patchIdForDiff(root, checkedBase, checked)
+
+    if (declaration.require_note === true && (media.text === undefined || media.text.trim() === "")) {
+      return yield* new LandFailed({
+        message:
+          "land.toml sets require_note = true, and there is no note; write .land/note.md (or pass --note <file> or --media <file>) and run land again",
+      })
+    }
+
+    if (declaration.feed !== undefined && options.noMedia === undefined) {
+      const unlinkedLand = yield* findUnlinkedLandMedia(root, media.linkedPaths)
+      if (unlinkedLand.length > 0) {
+        return yield* new LandFailed({
+          message: `.land/media/ has recordings not linked in the note:
+${listPreview(unlinkedLand)}
+Link them in .land/note.md, pass --media ${unlinkedLand[0]}, remove unused files, or pass --no-media "<reason>".`,
+        })
+      }
+
+      if (media.recordings.length === 0) {
+        const seedGroups = yield* findUnlinkedSeedMedia(commonDir, checkedBase, checked)
+        if (seedGroups.length > 0) {
+          const blocks = seedGroups.map(
+            (g) => `seed ${g.seedId} has recent media not attached to this landing:\n${listPreview(g.files)}`,
+          )
+          return yield* new LandFailed({
+            message: `${blocks.join("\n")}
+Attach one or more with:
+  land --media <path>
+or link them in .land/note.md. If none apply to this landing, pass:
+  land --no-media "<reason>"`,
+          })
+        }
+
+        if (declaration.visual_paths !== undefined && declaration.visual_paths.length > 0) {
+          const changedFiles = (yield* gitOk("diff", "--name-only", checkedBase, checked)).split("\n").filter(Boolean)
+          const matched = matchVisualPaths(declaration.visual_paths, changedFiles)
+          if (matched.length > 0) {
+            return yield* new LandFailed({
+              message: `this landing changes visual paths declared in land.toml, with no media attached:
+${listPreview(matched)}
+Attach a screenshot, GIF, or recording with:
+  land --media <file>
+(any local png, jpg, gif, webp, mp4, or webm works — or link it in .land/note.md, or run land record).
+If there is no visible change to show, pass:
+  land --no-media "<reason>"`,
+            })
+          }
+        }
+      }
+    }
+
+    if (declaration.evidence_check !== undefined) {
+      yield* runEvidenceCheck(declaration.evidence_check, root, {
+        base: checkedBase,
+        head: checked,
+        notePath: note?.path ?? "",
+        recordings: media.recordings.length,
+        noMedia: options.noMedia ?? "",
+      })
+    }
 
     if (declaration.gate !== undefined) {
       const priorFailure = yield* readGateFailure(commonDir, patchId)
@@ -529,8 +649,13 @@ If it is a verified pre-existing flake with an active owner, or fixed by a newer
     }
 
     if (note !== undefined) {
-      const count = media!.recordings.length
+      const count = media.recordings.length
       yield* say(`note   ${note.shown}${count === 0 ? "" : `, ${plural(count)}`}`)
+    } else if (media.recordings.length > 0) {
+      yield* say(`note   (from --media), ${plural(media.recordings.length)}`)
+    }
+    if (options.noMedia !== undefined) {
+      yield* say(`media  none (--no-media: ${options.noMedia})`)
     }
     if (options.ackFlake !== undefined) {
       yield* say(`flake  ${options.ackFlake.test} (owner ${options.ackFlake.owner})`)
@@ -561,9 +686,10 @@ If it is a verified pre-existing flake with an active owner, or fixed by a newer
         ...(gate === undefined ? {} : { gate }),
         ...(options.ackFlake === undefined ? {} : { acknowledgedFlake: options.ackFlake }),
         ...(fixesBugs.length === 0 ? {} : { fixesBugs }),
-        recordings: listed(media?.recordings ?? []),
+        ...(options.noMedia === undefined ? {} : { noMediaReason: options.noMedia }),
+        recordings: listed(media.recordings),
       }
-      const landing = yield* landingCommit(record, media?.text)
+      const landing = yield* landingCommit(record, media.text)
       // One atomic push, so a landing ref never names a head that is not on main.
       // Push to the URL, not to the remote's name, so git writes no tracking ref that
       // another land of the clone may be writing. advanceTracking moves it forward.
@@ -573,13 +699,16 @@ If it is a verified pre-existing flake with an active owner, or fixed by a newer
       )
       if (pushed.status === 0) {
         yield* clearGateFailure(commonDir, patchId)
+        yield* recordSeedLanding(commonDir, record.base, head)
         yield* advanceTracking(main, head)
         yield* say(`push   ${main} is at ${yield* short(head)}`)
         if (fixesBugs.length > 0) yield* say(`fixes  ${fixesBugs.map((id) => id.slice(0, 7)).join(", ")}`)
-        if (media?.at !== undefined) yield* uploadRecordings(root, declaration.feed!, media.at, head, media.recordings)
+        if (media.at !== undefined && media.recordings.length > 0) {
+          yield* uploadRecordings(root, declaration.feed!, media.at, head, media.recordings)
+        }
         if (note !== undefined) yield* deleteNote(note)
         if (declaration.feed !== undefined) {
-          const at = media?.at ?? (yield* githubRepository)
+          const at = media.at ?? (yield* githubRepository)
           if (at !== undefined) yield* say(`feed   ${landingAddress(declaration.feed, at, head)}`)
         }
         yield* warnUndoneCommits(root, main, record.base, head)

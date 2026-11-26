@@ -22,8 +22,9 @@ lander's machine, and the next `land` sends it.
   for a link to a missing file, a recording over 200 MB, a local recording with
   no `feed` key, and a local recording when origin is not on GitHub.
 - `feed-outbox` keeps a recording that did not upload, and prints
-  `land: media  <link> waits in the outbox: <why>`; the file stays in
-  `.land/media/`. The outbox is `$XDG_STATE_HOME/land/outbox`, or
+  `land: media  <link> waits in the outbox: <why>`; once the bytes are safely
+  persisted in the outbox, copies inside `.land/` are removed so they do not
+  block the next landing. The outbox is `$XDG_STATE_HOME/land/outbox`, or
   `~/.local/state/land/outbox`.
 - `feed-refused` drops a recording or an event notice the feed answers 404
   for, as it does for a repository without the App, and says
@@ -35,11 +36,16 @@ lander's machine, and the next `land` sends it.
   does not answer, the run sends it nothing more, so a hanging feed costs one
   timeout (30 s per call, 10 minutes per PUT).
 - `feed-event` is `land event <sha> --kind --state --title [--url]
-[--detail-file] [--repairs]`. It commits `event.json`, with no parent, pushes
-  it to `refs/land-events/<sha>/<id>`, posts the notice, and prints
+[--detail-file] [--media <file>]... [--repairs]`. It commits `event.json`,
+  with no parent, pushes it to `refs/land-events/<sha>/<id>`, posts the notice,
+  uploads any linked or `--media` recordings via `?event=<id>`, and prints
   `land: event  <ref> pushed; the feed has it`, or `...; the notice waits in
 the outbox: <why>`. It needs the `feed` key and a GitHub origin. A bad
   `--state` or a missing flag exits 2.
+- `feed-evidence` is `land evidence <sha> <file>... [-m <text> | --detail-file <file>] [--title <title>]`.
+  It pushes a `kind: "evidence"` event with `recordings` to
+  `refs/land-events/<sha>/<id>`, notifies the feed, and uploads each recording
+  with `?event=<id>` (falling back to the outbox when the feed is unreachable).
 - `feed-bug` is `land bug <sha> --title [--severity] [--source] [--location] [--detail-file] [--fixed-by] [--url]`,
   `land bug resolve <id> --by <fix-sha> [--title]`, and
   `land bugs [--open] [--since] [--path] [--severity] [--json]`. `land bug`
@@ -62,7 +68,7 @@ the outbox: <why>`. It needs the `feed` key and a GitHub origin. A bad
 - `land` with a note that links a recording, in a repository whose
   `land.toml` names `feed` (`src/landing.ts`, `src/media.ts`, `src/feed.ts`).
 - Any `land` while the outbox holds entries (`src/outbox.ts`).
-- `land event` (`src/event.ts`). `land --help` lists it.
+- `land event` (`src/event.ts`) and `land evidence` (`src/evidence.ts`). `land --help` lists them.
 - `land bug` and `land bugs` (`src/bug.ts`).
 - `land show`, `land comments`, `land review check`, `land brief` (`src/review.ts`), and `land auth` (`src/auth.ts`).
 
@@ -113,6 +119,12 @@ Preconditions:
 - **Drain.** Run `drive.ts r feed lander land`. It prints
   `land: outbox 1 sent` and `land: nothing to land`. A further
   `drive.ts r do lander land` prints `land: nothing to land` alone.
+- **Evidence (post-landing media).** Run
+  `drive.ts r feed lander 'echo shot > ../after.png && land evidence $(git rev-parse --short HEAD) ../after.png -m "Post-landing check"'`.
+  It prints `land: evidence refs/land-events/<head>/<id> pushed; the feed has it`
+  and `land: media  1 recording uploaded`. Run
+  `drive.ts r do origin.git 'for r in $(git for-each-ref --format="%(refname)" refs/land-events/); do echo $r; git show $r:event.json; done'`
+  to verify `kind: "evidence"` and `recordings`.
 - **Event.** Run
   `drive.ts r feed lander 'echo "It flickers." > ../finding.md && land event $(git rev-parse --short HEAD) --kind finding --state fail --title "banner flickers" --detail-file ../finding.md'`.
   It prints `land: event  refs/land-events/<head>/<id> pushed; the feed has it`.
@@ -166,7 +178,8 @@ Preconditions:
   "parseFixesBugTrailers reads only the git trailer paragraph and handles
   prefixes, lists and case", "land auth, show, comments, review check and brief
   work end-to-end against the feed", "land brief --base validates a
-  multi-commit landing".
+  multi-commit landing", "land evidence and land event --media upload
+  post-landing recordings and drain through the outbox when the feed is down".
 - `test/review-doc.test.ts`: "parses valid map review document with
   before/after flows, stops, notes, and coverage", "reports missing file
   coverage, out-of-range notes, and undrawable mermaid lines".

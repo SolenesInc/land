@@ -12,6 +12,7 @@ type Recording = {
   readonly feed: string
   readonly at: Repository
   readonly head: string
+  readonly eventId?: string
   readonly sha256: string
   readonly ext: string
 }

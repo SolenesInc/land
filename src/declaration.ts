@@ -7,6 +7,9 @@ export const Declaration = Schema.Struct({
   resolve: Schema.optionalKey(Schema.String), // a shell command run on rebase conflicts; exit 0 continues the rebase
   record: Schema.optionalKey(Schema.String), // a shell command that land record runs
   feed: Schema.optionalKey(Schema.String), // the feed that shows landings and hosts their recordings
+  visual_paths: Schema.optionalKey(Schema.Array(Schema.String)), // path globs that require media (or --no-media)
+  evidence_check: Schema.optionalKey(Schema.String), // a shell command run before the gate to check evidence
+  require_note: Schema.optionalKey(Schema.Boolean), // when true, refuse to land without a note
 })
 export type Declaration = typeof Declaration.Type
 
